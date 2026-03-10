@@ -3,7 +3,6 @@ import random
 from abc import ABC, abstractmethod
 import dearpygui.dearpygui as dpg
 import pandas as pd
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -12,6 +11,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, r2_score
 import numpy as np
 import threading
+import json
 
 def hex_to_rgb(hex_color: str, alpha: int = 255) -> tuple:
     """Convert hex color string to (R, G, B, A) tuple.
@@ -468,6 +468,271 @@ class ColumnSelectorNode(BaseNode):
 
         return {"X": X, "y": y}
 
+class TrainTestSplitNode(BaseNode):
+    LABEL       = "Train Test Split"
+    TITLE_COLOR = (120, 70, 160, 255)
+    WIDTH       = 260
+
+    def __init__(self):
+        super().__init__()
+        self._test_size_id = None
+        self._seed_id      = None
+        self._stratify_id  = None
+        self._status_id    = None
+
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # ── Input pins ────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("X")
+            self.input_attrs["X"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("y")
+            self.input_attrs["y"] = a
+
+            # ── Config ────────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+
+                with dpg.group(horizontal=True):
+                    dpg.add_text("Test Size:  ", color=hex_to_rgb("#555555"))
+                    self._test_size_id = dpg.add_slider_float(
+                        default_value=0.2,
+                        min_value=0.05,
+                        max_value=0.5,
+                        format="%.2f",
+                        width=self.WIDTH - 90,
+                    )
+
+                with dpg.group(horizontal=True):
+                    dpg.add_text("Random Seed:", color=hex_to_rgb("#555555"))
+                    self._seed_id = dpg.add_input_int(
+                        default_value=42,
+                        width=80,
+                    )
+
+                self._stratify_id = dpg.add_checkbox(
+                    label="Stratify (classification)",
+                    default_value=False,
+                )
+
+                dpg.add_spacer(height=4)
+                self._status_id = dpg.add_text(
+                    "Not split yet", color=hex_to_rgb("#888888"))
+
+            # ── Output pins ───────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
+                dpg.add_text("X_train")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as b:
+                dpg.add_text("X_test")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as c:
+                dpg.add_text("y_train")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as d:
+                dpg.add_text("y_test")
+
+            self.output_attrs = {
+                "X_train": a, "X_test": b,
+                "y_train": c, "y_test": d,
+            }
+            self.output_attr = None
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    def execute(self, X=None, y=None):
+        if X is None or y is None:
+            return {"X_train": None, "X_test": None,
+                    "y_train": None, "y_test":  None}
+        try:
+            test_size = dpg.get_value(self._test_size_id)
+            seed      = dpg.get_value(self._seed_id)
+            stratify  = dpg.get_value(self._stratify_id)
+
+            strat_arr = y if stratify else None
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y,
+                test_size=test_size,
+                random_state=seed,
+                stratify=strat_arr,
+            )
+
+            dpg.set_value(self._status_id,
+                f"Train: {len(X_train)}  Test: {len(X_test)}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+
+            return {
+                "X_train": X_train, "X_test":  X_test,
+                "y_train": y_train, "y_test":  y_test,
+            }
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return {"X_train": None, "X_test": None,
+                    "y_train": None, "y_test":  None}
+
+class ScalerNode(BaseNode):
+    LABEL       = "Scaler"
+    TITLE_COLOR = (160, 100, 30, 255)
+    WIDTH       = 240
+
+    def __init__(self):
+        super().__init__()
+        self._scaler_type_id = None
+        self._status_id      = None
+        self._scaler         = None
+
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # ── Input pin ─────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("X")
+            self.input_attrs["X"] = a
+
+            # ── Config ────────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+                dpg.add_text("Scaler Type:", color=hex_to_rgb("#333333"))
+                self._scaler_type_id = dpg.add_combo(
+                    items=[
+                        "StandardScaler",
+                        "MinMaxScaler",
+                        "RobustScaler",
+                        "MaxAbsScaler",
+                        "Normalizer",
+                    ],
+                    default_value="StandardScaler",
+                    width=self.WIDTH,
+                )
+                dpg.add_spacer(height=4)
+                self._status_id = dpg.add_text(
+                    "Not scaled yet", color=hex_to_rgb("#888888"))
+
+            # ── Output pins ───────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
+                dpg.add_text("X_scaled")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as b:
+                dpg.add_text("scaler")   # pass scaler downstream for inverse_transform
+
+            self.output_attrs = {"X_scaled": a, "scaler": b}
+            self.output_attr  = None
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    def _get_scaler(self, name):
+        from sklearn.preprocessing import (
+            StandardScaler, MinMaxScaler,
+            RobustScaler, MaxAbsScaler, Normalizer,
+        )
+        return {
+            "StandardScaler": StandardScaler(),
+            "MinMaxScaler":   MinMaxScaler(),
+            "RobustScaler":   RobustScaler(),
+            "MaxAbsScaler":   MaxAbsScaler(),
+            "Normalizer":     Normalizer(),
+        }.get(name, StandardScaler())
+
+    def execute(self, X=None):
+        if X is None:
+            return {"X_scaled": None, "scaler": None}
+        try:
+            import pandas as pd
+            name         = dpg.get_value(self._scaler_type_id)
+            self._scaler = self._get_scaler(name)
+
+            # Handle Series — reshape to 2D, scale, flatten back to 1D
+            is_series = isinstance(X, pd.Series)
+            arr       = np.array(X).astype(np.float32)
+            if arr.ndim == 1:
+                arr = arr.reshape(-1, 1)
+
+            scaled = self._scaler.fit_transform(arr)
+
+            # Flatten back if input was 1D
+            if is_series or scaled.shape[1] == 1:
+                scaled = scaled.flatten()
+
+            dpg.set_value(self._status_id,
+            f"{name} applied  shape={scaled.shape}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+
+            return {"X_scaled": scaled, "scaler": self._scaler}
+
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return {"X_scaled": None, "scaler": None}
+
+class InverseScalerNode(BaseNode):
+    LABEL       = "Inverse Scaler"
+    TITLE_COLOR = (160, 100, 30, 255)
+    WIDTH       = 240
+
+    def __init__(self):
+        super().__init__()
+        self._status_id = None
+
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("X_scaled")
+            self.input_attrs["X_scaled"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("scaler")
+            self.input_attrs["scaler"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+                self._status_id = dpg.add_text(
+                    "Connect X_scaled and scaler",
+                    color=hex_to_rgb("#888888"),
+                )
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
+                dpg.add_text("X_original")
+            self.output_attrs = {"X_original": a}
+            self.output_attr  = None
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    def execute(self, X_scaled=None, scaler=None):
+        if X_scaled is None:
+            dpg.set_value(self._status_id, "X_scaled not connected.")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return {"X_original": None}
+
+        if scaler is None:
+            dpg.set_value(self._status_id, "Scaler not connected.")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return {"X_original": None}
+
+        try:
+            arr = np.array(X_scaled).astype(np.float32)
+            is_1d = arr.ndim == 1
+            if is_1d:
+                arr = arr.reshape(-1, 1)
+
+            result = scaler.inverse_transform(arr)
+
+            if is_1d:
+                result = result.flatten()
+
+            dpg.set_value(self._status_id,
+                f"Restored  shape={result.shape}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+
+            return {"X_original": result}
+
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return {"X_original": None}
 
 class ANNNode(BaseNode):
     LABEL       = "ANN"
@@ -489,12 +754,13 @@ class ANNNode(BaseNode):
         self._active_tab    = "Layers"
 
         # ── Training config ───────────────────────────────────────────────
-        self._task_id       = None
-        self._optimizer_id  = None
-        self._lr_id         = None
-        self._epochs_id     = None
-        self._batch_id      = None
-        self._val_split_id  = None
+        self._task_id        = None
+        self._output_size_id = None
+        self._optimizer_id   = None
+        self._lr_id          = None
+        self._epochs_id      = None
+        self._batch_id       = None
+        self._val_split_id   = None
 
         # ── Regularization config ─────────────────────────────────────────
         self._dropout_id    = None
@@ -505,24 +771,26 @@ class ANNNode(BaseNode):
         self._patience_id   = None
 
         # ── Status / progress ─────────────────────────────────────────────
-        self._status_id     = None
-        self._progress_id   = None
+        self._status_id   = None
+        self._progress_id = None
 
         # ── Runtime ───────────────────────────────────────────────────────
-        self._model         = None
-        self._scaler_X      = None
-        self._scaler_y      = None
-        self._is_training   = False
-        self._result        = None
-        self._last_X        = None
-        self._last_y        = None
+        self._model       = None
+        self._scaler_X    = None
+        self._scaler_y    = None
+        self._is_training = False
+        self._result      = None
+        self._last_X      = None
+        self._last_y      = None
+        self._last_X_test = None
+        self._device      = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
 
     # ══════════════════════════════════════════════════════════════════════
     #  BUILD
     # ══════════════════════════════════════════════════════════════════════
     def build(self, parent, pos=(10, 10)):
         with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
-
             # ── Input pins ────────────────────────────────────────────────
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
                 dpg.add_text("X")
@@ -532,11 +800,15 @@ class ANNNode(BaseNode):
                 dpg.add_text("y")
             self.input_attrs["y"] = a
 
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("X_test")
+            self.input_attrs["X_test"] = a
+
             # ── Body ──────────────────────────────────────────────────────
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
                 dpg.add_spacer(height=4)
 
-                # Manual tab buttons
+                # Manual tab buttons — no tab_bar to avoid border bleed
                 with dpg.group(horizontal=True):
                     for tab_name in ["Layers", "Training", "Regularization"]:
                         btn = dpg.add_button(
@@ -549,31 +821,26 @@ class ANNNode(BaseNode):
 
                 dpg.add_spacer(height=8)
 
-                # Layers tab content
                 with dpg.group(show=True) as g:
                     self._build_layers_tab()
                 self._tab_groups["Layers"] = g
 
-                # Training tab content
                 with dpg.group(show=False) as g:
                     self._build_training_tab()
                 self._tab_groups["Training"] = g
 
-                # Regularization tab content
                 with dpg.group(show=False) as g:
                     self._build_regularization_tab()
                 self._tab_groups["Regularization"] = g
 
                 dpg.add_spacer(height=8)
 
-                # Status + progress
-                self._status_id   = dpg.add_text(
+                self._status_id = dpg.add_text(
                     "Ready", color=hex_to_rgb("#555555"))
                 self._progress_id = dpg.add_progress_bar(
                     default_value=0.0, width=self.WIDTH)
                 dpg.add_spacer(height=4)
 
-                # Train button
                 train_btn = dpg.add_button(
                     label="TRAIN",
                     width=self.WIDTH,
@@ -581,6 +848,21 @@ class ANNNode(BaseNode):
                     callback=self._on_train_click,
                 )
                 self._apply_btn_theme(train_btn, hex_to_rgb("#2D6A9F"))
+
+                dpg.add_spacer(height=4)
+                with dpg.group(horizontal=True):
+                    save_btn = dpg.add_button(
+                        label="Save Model",
+                        width=self.WIDTH // 2 - 2,
+                        callback=self._save_model,
+                    )
+                    load_btn = dpg.add_button(
+                        label="Load Model",
+                        width=self.WIDTH // 2 - 2,
+                        callback=self._load_model,
+                    )
+                    self._apply_btn_theme(save_btn, hex_to_rgb("#2A5A2A"))
+                    self._apply_btn_theme(load_btn, hex_to_rgb("#2A2A6A"))
 
             # ── Output pins ───────────────────────────────────────────────
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
@@ -598,7 +880,7 @@ class ANNNode(BaseNode):
         return self.node_id
 
     # ══════════════════════════════════════════════════════════════════════
-    #  TAB CONTENT — no dpg.tab() wrapper, just plain widgets
+    #  TAB CONTENT — plain widgets, no dpg.tab() wrapper
     # ══════════════════════════════════════════════════════════════════════
     def _build_layers_tab(self):
         dpg.add_text("Task:", color=hex_to_rgb("#333333"))
@@ -607,9 +889,23 @@ class ANNNode(BaseNode):
             default_value="Classification",
             width=self.WIDTH,
         )
-        dpg.add_spacer(height=8)
+        dpg.add_spacer(height=6)
 
-        dpg.add_text("Hidden Layers:", color=hex_to_rgb("#333333"))
+        with dpg.group(horizontal=True):
+            dpg.add_text("Output Neurons:", color=hex_to_rgb("#555555"))
+            self._output_size_id = dpg.add_input_int(
+                default_value=1,
+                min_value=1,
+                max_value=4096,
+                width=90,
+            )
+        dpg.add_spacer(height=2)
+        dpg.add_text("Define ALL layers including output layer",
+                     color=hex_to_rgb("#888888"))
+        dpg.add_spacer(height=6)
+
+        dpg.add_text("Layers  (input → ... → output):",
+                     color=hex_to_rgb("#333333"))
         self._layer_list_id = dpg.add_listbox(
             items=[],
             width=self.WIDTH,
@@ -625,16 +921,15 @@ class ANNNode(BaseNode):
                 max_value=4096,
                 width=90,
             )
-
         dpg.add_spacer(height=4)
         with dpg.group(horizontal=True):
             dpg.add_text("Act:  ", color=hex_to_rgb("#555555"))
             self._activation_id = dpg.add_combo(
-                items=["ReLU", "Sigmoid", "Tanh", "LeakyReLU", "ELU", "GELU", "None"],
+                items=["ReLU", "Sigmoid", "Tanh",
+                       "LeakyReLU", "ELU", "GELU", "None"],
                 default_value="ReLU",
                 width=self.WIDTH - 52,
             )
-
         dpg.add_spacer(height=6)
         with dpg.group(horizontal=True):
             add_btn = dpg.add_button(
@@ -658,7 +953,6 @@ class ANNNode(BaseNode):
             width=self.WIDTH,
         )
         dpg.add_spacer(height=8)
-
         with dpg.group(horizontal=True):
             dpg.add_text("Learning Rate:", color=hex_to_rgb("#555555"))
             self._lr_id = dpg.add_input_float(
@@ -789,7 +1083,9 @@ class ANNNode(BaseNode):
             "None":      nn.Identity(),
         }.get(name, nn.ReLU())
 
-    def _build_model(self, input_size, output_size):
+    def _build_model(self, input_size):
+        """Build model exactly as defined in the layer list.
+        No automatic output layer — user defines everything."""
         dropout = dpg.get_value(self._dropout_id)
         layers  = []
         prev    = input_size
@@ -800,14 +1096,6 @@ class ANNNode(BaseNode):
             if dropout > 0:
                 layers.append(nn.Dropout(p=dropout))
             prev = layer["units"]
-
-        layers.append(nn.Linear(prev, output_size))
-
-        task = dpg.get_value(self._task_id)
-        if task == "Classification" and output_size == 1:
-            layers.append(nn.Sigmoid())
-        elif task == "Classification" and output_size > 1:
-            layers.append(nn.Softmax(dim=1))
 
         return nn.Sequential(*layers)
 
@@ -845,12 +1133,13 @@ class ANNNode(BaseNode):
             daemon=True,
         ).start()
 
-    def _train(self, X_df, y_series):
+    def _train(self, X_raw, y_raw):
         self._is_training = True
         self._set_status("Preparing data...", hex_to_rgb("#2266AA"))
 
         try:
             task        = dpg.get_value(self._task_id)
+            output_size = dpg.get_value(self._output_size_id)
             epochs      = dpg.get_value(self._epochs_id)
             batch_size  = dpg.get_value(self._batch_id)
             val_split   = dpg.get_value(self._val_split_id)
@@ -860,41 +1149,39 @@ class ANNNode(BaseNode):
             patience    = dpg.get_value(self._patience_id)
 
             # ── Prepare data ──────────────────────────────────────────────
-            X = X_df.values.astype(np.float32)
-            y = y_series.values.astype(np.float32)
+            # np.array() handles both DataFrames and numpy arrays safely
+            X = np.array(X_raw).astype(np.float32)
+            y = np.array(y_raw).astype(np.float32)
 
             if task == "Classification":
-                classes     = np.unique(y)
-                n_classes   = len(classes)
-                output_size = 1 if n_classes == 2 else n_classes
-                label_map   = {c: i for i, c in enumerate(classes)}
-                y           = np.array([label_map[v] for v in y],
-                                       dtype=np.float32)
+                classes   = np.unique(y)
+                label_map = {c: i for i, c in enumerate(classes)}
+                y         = np.array([label_map[v] for v in y],
+                                     dtype=np.float32)
             else:
-                output_size = 1
                 self._scaler_y = StandardScaler()
                 y = self._scaler_y.fit_transform(
-                    y.reshape(-1, 1)).flatten()
+                    y.reshape(-1, 1)).flatten().astype(np.float32)
 
             self._scaler_X = StandardScaler()
-            X = self._scaler_X.fit_transform(X)
+            X = self._scaler_X.fit_transform(X).astype(np.float32)
 
             X_train, X_val, y_train, y_val = train_test_split(
                 X, y, test_size=val_split, random_state=42)
 
-            X_train_t = torch.tensor(X_train)
-            y_train_t = torch.tensor(y_train)
-            X_val_t   = torch.tensor(X_val)
-            y_val_t   = torch.tensor(y_val)
+            X_train_t = torch.tensor(X_train).to(self._device)
+            y_train_t = torch.tensor(y_train).to(self._device)
+            X_val_t   = torch.tensor(X_val).to(self._device)
+            y_val_t   = torch.tensor(y_val).to(self._device)
 
             # ── Build model ───────────────────────────────────────────────
             if not self._layers:
-                self._set_status("Add at least one hidden layer.",
+                self._set_status("Add at least one layer.",
                                  hex_to_rgb("#CC4444"))
                 self._is_training = False
                 return
 
-            self._model = self._build_model(X.shape[1], output_size)
+            self._model = self._build_model(X.shape[1]).to(self._device)
             optimizer   = self._get_optimizer(self._model)
 
             if task == "Classification":
@@ -907,9 +1194,9 @@ class ANNNode(BaseNode):
             dataloader = torch.utils.data.DataLoader(
                 dataset, batch_size=batch_size, shuffle=True)
 
-            best_val   = float("inf")
-            pat_count  = 0
-            history    = {"train_loss": [], "val_loss": []}
+            best_val  = float("inf")
+            pat_count = 0
+            history   = {"train_loss": [], "val_loss": []}
 
             # ── Training loop ─────────────────────────────────────────────
             for epoch in range(epochs):
@@ -928,13 +1215,13 @@ class ANNNode(BaseNode):
                         loss = criterion(out.squeeze(), y_batch)
 
                     if l1_lambda > 0:
-                        l1 = sum(p.abs().sum()
-                                 for p in self._model.parameters())
+                        l1   = sum(p.abs().sum()
+                                   for p in self._model.parameters())
                         loss = loss + l1_lambda * l1
 
                     if l2_lambda > 0:
-                        l2 = sum(p.pow(2).sum()
-                                 for p in self._model.parameters())
+                        l2   = sum(p.pow(2).sum()
+                                   for p in self._model.parameters())
                         loss = loss + l2_lambda * l2
 
                     loss.backward()
@@ -978,35 +1265,42 @@ class ANNNode(BaseNode):
                                 hex_to_rgb("#CC8800"))
                             break
 
-            # ── Final evaluation ──────────────────────────────────────────
+            # ── Generate predictions on test set ──────────────────────────
             self._model.eval()
             with torch.no_grad():
-                preds_t = self._model(torch.tensor(X))
+                if self._last_X_test is not None:
+                    X_eval = self._scaler_X.transform(
+                        np.array(self._last_X_test).astype(np.float32))
+                else:
+                    X_eval = X   # fallback to training data
+
+                preds_t = self._model(
+                    torch.tensor(X_eval).to(self._device))
 
             if task == "Classification":
                 if output_size == 1:
-                    preds = (preds_t.squeeze().numpy() > 0.5).astype(int)
+                    preds = (preds_t.cpu().squeeze().numpy()
+                             > 0.5).astype(int)
                 else:
-                    preds = preds_t.argmax(dim=1).numpy()
-                metric_val  = accuracy_score(y.astype(int), preds)
+                    preds = preds_t.cpu().argmax(dim=1).numpy()
+                metric_val  = None   # compute via MetricsNode
                 metric_name = "accuracy"
             else:
                 preds = self._scaler_y.inverse_transform(
-                    preds_t.squeeze().numpy().reshape(-1, 1)).flatten()
-                y_orig = self._scaler_y.inverse_transform(
-                    y.reshape(-1, 1)).flatten()
-                metric_val  = r2_score(y_orig, preds)
+                    preds_t.cpu().squeeze().numpy().reshape(
+                        -1, 1)).flatten()
+                metric_val  = None   # compute via MetricsNode
                 metric_name = "r2_score"
 
             self._result = {
                 "predictions": preds,
-                "metrics":     {metric_name: metric_val,
-                                "history":   history},
+                "metrics":     {"history": history},
                 "model":       self._model,
             }
             self._set_status(
-                f"Done!  {metric_name} = {metric_val:.4f}",
-                hex_to_rgb("#2A7A2A"))
+                f"Done! Predictions ready  [{self._device}]",
+                hex_to_rgb("#2A7A2A"),
+            )
 
         except Exception as e:
             self._set_status(f"Error: {e}", hex_to_rgb("#CC4444"))
@@ -1016,9 +1310,11 @@ class ANNNode(BaseNode):
     # ══════════════════════════════════════════════════════════════════════
     #  EXECUTE
     # ══════════════════════════════════════════════════════════════════════
-    def execute(self, X=None, y=None):
-        self._last_X = X
-        self._last_y = y
+    def execute(self, X=None, y=None, X_test=None):
+        self._last_X      = X
+        self._last_y      = y
+        self._last_X_test = X_test
+
         if self._result is None:
             self._set_status("Hit TRAIN to train the model.",
                              hex_to_rgb("#888888"))
@@ -1046,6 +1342,75 @@ class ANNNode(BaseNode):
                                     category=dpg.mvThemeCat_Core)
         dpg.bind_item_theme(btn_id, t)
 
+    # Graph Saviing
+    
+    def _save_model(self):
+        if self._model is None:
+            self._set_status("No model to save — train first.",
+                             hex_to_rgb("#CC4444"))
+            return
+        with dpg.file_dialog(
+            label="Save Model",
+            width=500, height=350,
+            show=True,
+            callback=self._on_save_model,
+            default_filename="model.pt",
+        ):
+            dpg.add_file_extension(".pt",  color=(0, 255, 120, 255))
+            dpg.add_file_extension(".*",   color=(200, 200, 200, 255))
+
+    def _on_save_model(self, sender, app_data):
+        path = app_data.get("file_path_name", "")
+        if not path:
+            return
+        try:
+            torch.save({
+                "model_state":  self._model.state_dict(),
+                "model":        self._model,
+                "scaler_X":     self._scaler_X,
+                "scaler_y":     self._scaler_y,
+                "layers":       self._layers,
+            }, path)
+            self._set_status(f"Saved → {path.split('/')[-1]}",
+                             hex_to_rgb("#2A7A2A"))
+        except Exception as e:
+            self._set_status(f"Save error: {e}", hex_to_rgb("#CC4444"))
+
+    def _load_model(self):
+        with dpg.file_dialog(
+            label="Load Model",
+            width=500, height=350,
+            show=True,
+            callback=self._on_load_model,
+        ):
+            dpg.add_file_extension(".pt",  color=(0, 255, 120, 255))
+            dpg.add_file_extension(".*",   color=(200, 200, 200, 255))
+
+    def _on_load_model(self, sender, app_data):
+        path = app_data.get("file_path_name", "")
+        if not path:
+            return
+        try:
+            checkpoint      = torch.load(path, map_location=self._device)
+            self._model     = checkpoint["model"].to(self._device)
+            self._scaler_X  = checkpoint.get("scaler_X")
+            self._scaler_y  = checkpoint.get("scaler_y")
+            self._layers    = checkpoint.get("layers", [])
+
+            # Restore layer list display
+            dpg.configure_item(self._layer_list_id,
+                               items=[self._layer_str(l)
+                                      for l in self._layers])
+
+            self._result = {
+                "predictions": None,
+                "metrics":     None,
+                "model":       self._model,
+            }
+            self._set_status(f"Loaded ← {path.split('/')[-1]}",
+                             hex_to_rgb("#2A7A2A"))
+        except Exception as e:
+            self._set_status(f"Load error: {e}", hex_to_rgb("#CC4444"))
 class NodeGraph:
     """Tracks all live nodes and links; runs the graph on demand."""
 
@@ -1143,16 +1508,579 @@ class NodeGraph:
             print(f"  [{node.LABEL}({args_str})] → {result}")
 
         print("─────────────────────\n")
+#Custom Visualization Nodes:
+class ScatterPlotNode(BaseNode):
+    LABEL       = "Scatter Plot"
+    TITLE_COLOR = (40, 140, 120, 255)
+    WIDTH       = 300
+    HEIGHT      = 300
 
+    def __init__(self):
+        super().__init__()
+        self._plot_id    = None
+        self._series_id  = None
+        self._line_id    = None
+        self._status_id  = None
+
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # ── Input pins ────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("y_test")
+            self.input_attrs["y_test"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("predictions")
+            self.input_attrs["predictions"] = a
+
+            # ── Plot ──────────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+                self._status_id = dpg.add_text(
+                    "Connect y_test and predictions",
+                    color=hex_to_rgb("#888888"),
+                )
+                dpg.add_spacer(height=4)
+
+                with dpg.plot(
+                    label="Actual vs Predicted",
+                    width=self.WIDTH,
+                    height=self.HEIGHT,
+                    no_title=False,
+                ) as self._plot_id:
+                    dpg.add_plot_legend()
+                    x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="Actual")
+                    y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Predicted")
+
+                    # Scatter series — starts empty
+                    self._series_id = dpg.add_scatter_series(
+                        [], [],
+                        label="Predictions",
+                        parent=y_axis,
+                    )
+                    # Perfect prediction line y=x
+                    self._line_id = dpg.add_line_series(
+                        [], [],
+                        label="Perfect fit",
+                        parent=y_axis,
+                    )
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    def execute(self, y_test=None, predictions=None):
+        if y_test is None or predictions is None:
+            dpg.set_value(self._status_id, "Waiting for data...")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#888888"))
+            return None
+
+        try:
+            # Convert to plain python lists for DPG
+            y_true = list(map(float, y_test))
+            y_pred = list(map(float, predictions))
+
+            # Update scatter
+            dpg.set_value(self._series_id, [y_true, y_pred])
+
+            # Update perfect fit line across data range
+            mn = min(y_true)
+            mx = max(y_true)
+            dpg.set_value(self._line_id, [[mn, mx], [mn, mx]])
+
+            # Fit axes to data
+            dpg.fit_axis_data(dpg.get_item_parent(self._series_id))
+            dpg.fit_axis_data(dpg.get_item_parent(self._line_id))
+
+            # Compute R2 for status
+            ss_res = sum((a - b) ** 2 for a, b in zip(y_true, y_pred))
+            mean_y = sum(y_true) / len(y_true)
+            ss_tot = sum((a - mean_y) ** 2 for a in y_true)
+            r2     = 1 - ss_res / ss_tot if ss_tot != 0 else 0.0
+
+            dpg.set_value(self._status_id, f"R² = {r2:.4f}  n={len(y_true)}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+
+        return None
+
+class DataInspectorNode(BaseNode):
+    LABEL       = "Data Inspector"
+    TITLE_COLOR = (60, 60, 60, 255)
+    WIDTH       = 320
+
+    def __init__(self):
+        super().__init__()
+        self._info_id    = None
+        self._list_id    = None
+        self._label_id   = None
+
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("data")
+            self.input_attrs["data"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+                self._label_id = dpg.add_text(
+                    "No data", color=hex_to_rgb("#888888"))
+                self._info_id  = dpg.add_text(
+                    "", color=hex_to_rgb("#555555"))
+                dpg.add_spacer(height=4)
+                self._list_id = dpg.add_listbox(
+                    items=[],
+                    width=self.WIDTH,
+                    num_items=10,
+                )
+
+            self.output_attr  = None
+            self.output_attrs = {}
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    def execute(self, data=None):
+        if data is None:
+            dpg.set_value(self._label_id, "No data received")
+            dpg.configure_item(self._label_id, color=hex_to_rgb("#CC4444"))
+            dpg.configure_item(self._list_id, items=[])
+            return None
+
+        import pandas as pd
+        data = np.array(data) if not isinstance(data, (pd.DataFrame, pd.Series)) else data
+
+        # ── Info line ─────────────────────────────────────────────────────
+        if isinstance(data, pd.DataFrame):
+            dtype_str = "DataFrame"
+            shape_str = f"{data.shape[0]} rows × {data.shape[1]} cols"
+            rows = [" | ".join(str(v) for v in row)
+                    for row in data.head(20).values]
+            header = " | ".join(data.columns.astype(str))
+            items  = [f"COLUMNS: {header}", "─" * 40] + rows
+
+        elif isinstance(data, pd.Series):
+            dtype_str = "Series"
+            shape_str = f"{len(data)} values  dtype={data.dtype}"
+            items = [str(v) for v in data.head(20).values]
+
+        else:
+            arr = np.array(data)
+            dtype_str = "Array"
+            shape_str = f"shape={arr.shape}  dtype={arr.dtype}"
+            if arr.ndim == 1:
+                items = [str(v) for v in arr[:20]]
+            else:
+                items = [" | ".join(f"{v:.4f}" if isinstance(v, float)
+                                    else str(v) for v in row)
+                         for row in arr[:20]]
+
+        dpg.set_value(self._label_id, dtype_str)
+        dpg.configure_item(self._label_id, color=hex_to_rgb("#2266AA"))
+        dpg.set_value(self._info_id,  shape_str)
+        dpg.configure_item(self._list_id, items=items)
+        return None
+
+class NetworkVisualizerNode(BaseNode):
+    LABEL       = "Network Visualizer"
+    TITLE_COLOR = (80, 60, 150, 255)
+    WIDTH       = 340
+    HEIGHT      = 280
+
+    # Visual constants
+    NEURON_R    = 10
+    LAYER_GAP   = 70
+    MAX_NEURONS = 6    # max neurons to draw per layer before collapsing
+
+    def __init__(self):
+        super().__init__()
+        self._canvas_id  = None
+        self._status_id  = None
+        self._last_model = None
+
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # ── Input pin ─────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("model")
+            self.input_attrs["model"] = a
+
+            # ── Body ──────────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+
+                self._status_id = dpg.add_text(
+                    "Connect model pin then hit Refresh",
+                    color=hex_to_rgb("#888888"),
+                )
+                dpg.add_spacer(height=4)
+
+                refresh_btn = dpg.add_button(
+                    label="↺ Refresh",
+                    width=self.WIDTH,
+                    callback=self._refresh,
+                )
+                self._apply_btn_theme(refresh_btn, hex_to_rgb("#4A4A8A"))
+                dpg.add_spacer(height=6)
+
+                # Drawlist canvas
+                self._canvas_id = dpg.add_drawlist(
+                    width=self.WIDTH,
+                    height=self.HEIGHT,
+                )
+                self._draw_placeholder()
+
+            self.output_attr  = None
+            self.output_attrs = {}
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    # ── Drawing ───────────────────────────────────────────────────────────
+    def _draw_placeholder(self):
+        dpg.draw_text(
+            (self.WIDTH // 2 - 60, self.HEIGHT // 2 - 8),
+            "No model loaded",
+            color=hex_to_rgb("#666666"),
+            size=14,
+            parent=self._canvas_id,
+        )
+
+    def _clear_canvas(self):
+        dpg.delete_item(self._canvas_id, children_only=True)
+
+    def _draw_network(self, layer_sizes: list[int], layer_labels: list[str]):
+        self._clear_canvas()
+
+        n_layers  = len(layer_sizes)
+        total_w   = self.WIDTH
+        total_h   = self.HEIGHT
+        r         = self.NEURON_R
+        pad_x     = 30
+        pad_y     = 20
+
+        # X positions for each layer
+        if n_layers == 1:
+            x_positions = [total_w // 2]
+        else:
+            step = (total_w - 2 * pad_x) / (n_layers - 1)
+            x_positions = [int(pad_x + i * step) for i in range(n_layers)]
+
+        # Neuron Y positions per layer
+        def neuron_ys(count):
+            display = min(count, self.MAX_NEURONS)
+            if display == 1:
+                return [total_h // 2], count > 1
+            gap = (total_h - 2 * pad_y) / (display - 1)
+            ys  = [int(pad_y + j * gap) for j in range(display)]
+            return ys, count > self.MAX_NEURONS
+
+        layer_ys = []
+        truncated = []
+        for size in layer_sizes:
+            ys, trunc = neuron_ys(size)
+            layer_ys.append(ys)
+            truncated.append(trunc)
+
+        # Draw connections first (behind neurons)
+        for i in range(n_layers - 1):
+            for y1 in layer_ys[i]:
+                for y2 in layer_ys[i + 1]:
+                    dpg.draw_line(
+                        (x_positions[i],     y1),
+                        (x_positions[i + 1], y2),
+                        color=hex_to_rgb("#555577", alpha=120),
+                        thickness=1,
+                        parent=self._canvas_id,
+                    )
+
+        # Draw neurons
+        for i, (x, ys) in enumerate(zip(x_positions, layer_ys)):
+            is_input  = (i == 0)
+            is_output = (i == n_layers - 1)
+
+            if is_input:
+                color    = hex_to_rgb("#4A9A6A")   # green — input
+                outline  = hex_to_rgb("#2A7A4A")
+            elif is_output:
+                color    = hex_to_rgb("#9A4A4A")   # red — output
+                outline  = hex_to_rgb("#7A2A2A")
+            else:
+                color    = hex_to_rgb("#4A6A9A")   # blue — hidden
+                outline  = hex_to_rgb("#2A4A7A")
+
+            for y in ys:
+                dpg.draw_circle(
+                    (x, y), r,
+                    color=outline,
+                    fill=color,
+                    thickness=1.5,
+                    parent=self._canvas_id,
+                )
+
+            # Draw "..." if truncated
+            if truncated[i]:
+                last_y = ys[-1]
+                dpg.draw_text(
+                    (x - 6, last_y + r + 4),
+                    "...",
+                    color=hex_to_rgb("#AAAAAA"),
+                    size=12,
+                    parent=self._canvas_id,
+                )
+
+            # Layer label below
+            dpg.draw_text(
+                (x - 14, total_h - 26),
+                layer_labels[i].split("\n")[0],   # "in" / "L" / "out"
+                color=hex_to_rgb("#AAAAAA"),
+                size=11,
+                parent=self._canvas_id,
+            )
+            # Exact neuron count below
+            dpg.draw_text(
+                (x - 10, total_h - 14),
+                str(layer_sizes[i]),              # exact number
+                color=hex_to_rgb("#DDDDDD"),
+                size=11,
+                parent=self._canvas_id,
+            )
+
+    def _parse_model(self, model):
+        """Extract layer sizes and labels from a PyTorch Sequential model."""
+        import torch.nn as nn
+        layer_sizes  = []
+        layer_labels = []
+
+        # Input size from first Linear layer
+        for module in model.modules():
+            if isinstance(module, nn.Linear):
+                layer_sizes.append(module.in_features)
+                layer_labels.append(f"in\n{module.in_features}")
+                break
+
+        # Hidden + output layers
+        for module in model.modules():
+            if isinstance(module, nn.Linear):
+                layer_sizes.append(module.out_features)
+                layer_labels.append(f"L\n{module.out_features}")
+
+        # Fix last label
+        if layer_labels:
+            layer_labels[-1] = f"out\n{layer_sizes[-1]}"
+
+        return layer_sizes, layer_labels
+
+    # ── Refresh ───────────────────────────────────────────────────────────
+    def _refresh(self):
+        if self._last_model is None:
+            dpg.set_value(self._status_id,
+                          "No model yet — run graph first.")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#CC4444"))
+            return
+        try:
+            sizes, labels = self._parse_model(self._last_model)
+            self._draw_network(sizes, labels)
+            arch = " → ".join(str(s) for s in sizes)
+            dpg.set_value(self._status_id, f"{arch}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#CC4444"))
+
+    # ── Execute ───────────────────────────────────────────────────────────
+    def execute(self, model=None):
+        if model is not None:
+            self._last_model = model
+            dpg.set_value(self._status_id,
+                          "Model received — hit ↺ Refresh")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#2266AA"))
+        return None
+
+    # ── Theme helper ──────────────────────────────────────────────────────
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,
+                                    color,   category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                    darker,  category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                    darkest, category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
+
+class MetricsNode(BaseNode):
+    LABEL       = "Test Metrics"
+    TITLE_COLOR = (160, 120, 30, 255)
+    WIDTH       = 280
+
+    METRICS = ["R²", "RMSE", "MAE", "MAPE", "MSE", "Accuracy", "F1", "Precision", "Recall"]
+
+    def __init__(self):
+        super().__init__()
+        self._checks    = {}   # metric name -> checkbox id
+        self._results   = {}   # metric name -> text widget id
+        self._status_id = None
+
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # ── Input pins ────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("y_true")
+            self.input_attrs["y_true"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("predictions")
+            self.input_attrs["predictions"] = a
+
+            # ── Body ──────────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+                dpg.add_text("Select Metrics:", color=hex_to_rgb("#333333"))
+                dpg.add_spacer(height=4)
+
+                # Checkboxes — two columns
+                for i in range(0, len(self.METRICS), 2):
+                    with dpg.group(horizontal=True):
+                        m1 = self.METRICS[i]
+                        self._checks[m1] = dpg.add_checkbox(
+                            label=m1,
+                            default_value=True if m1 in ["R²", "RMSE", "MAE"] else False,
+                        )
+                        if i + 1 < len(self.METRICS):
+                            dpg.add_spacer(width=16)
+                            m2 = self.METRICS[i + 1]
+                            self._checks[m2] = dpg.add_checkbox(
+                                label=m2,
+                                default_value=False,
+                            )
+
+                dpg.add_spacer(height=8)
+                dpg.add_spacer(height=6)
+
+                # Results display
+                dpg.add_text("Results:", color=hex_to_rgb("#333333"))
+                dpg.add_spacer(height=4)
+                for metric in self.METRICS:
+                    self._results[metric] = dpg.add_text(
+                        f"{metric}: —",
+                        color=hex_to_rgb("#888888"),
+                        show=False,
+                    )
+
+                dpg.add_spacer(height=4)
+                self._status_id = dpg.add_text(
+                    "Run graph to compute metrics",
+                    color=hex_to_rgb("#888888"),
+                )
+
+            self.output_attr  = None
+            self.output_attrs = {}
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    # ── Execution ─────────────────────────────────────────────────────────
+    def execute(self, y_true=None, predictions=None):
+        if y_true is None or predictions is None:
+            dpg.set_value(self._status_id, "Waiting for data...")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#888888"))
+            return None
+
+        try:
+            yt = np.array(y_true,       dtype=np.float64).flatten()
+            yp = np.array(predictions,  dtype=np.float64).flatten()
+
+            # Hide all result rows first
+            for metric in self.METRICS:
+                dpg.configure_item(self._results[metric], show=False)
+
+            computed = {}
+
+            for metric in self.METRICS:
+                if not dpg.get_value(self._checks[metric]):
+                    continue
+
+                val = self._compute(metric, yt, yp)
+                computed[metric] = val
+
+                label = f"{metric}: {val}" if isinstance(val, str) else f"{metric}: {val:.6f}"
+                dpg.set_value(self._results[metric], label)
+                dpg.configure_item(
+                    self._results[metric],
+                    color=hex_to_rgb("#2A7A2A"),
+                    show=True,
+                )
+
+            dpg.set_value(self._status_id,
+                          f"{len(computed)} metric(s) computed")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#2266AA"))
+
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+
+        return None
+
+    def _compute(self, metric, yt, yp):
+        from sklearn.metrics import (
+            r2_score, mean_squared_error, mean_absolute_error,
+            accuracy_score, f1_score, precision_score, recall_score,
+        )
+        try:
+            if metric == "R²":
+                return r2_score(yt, yp)
+            elif metric == "RMSE":
+                return np.sqrt(mean_squared_error(yt, yp))
+            elif metric == "MAE":
+                return mean_absolute_error(yt, yp)
+            elif metric == "MSE":
+                return mean_squared_error(yt, yp)
+            elif metric == "MAPE":
+                mask = yt != 0
+                return float(np.mean(np.abs((yt[mask] - yp[mask]) / yt[mask])) * 100)
+            elif metric == "Accuracy":
+                return accuracy_score(yt.astype(int), yp.astype(int))
+            elif metric == "F1":
+                return f1_score(yt.astype(int), yp.astype(int), average="weighted", zero_division=0)
+            elif metric == "Precision":
+                return precision_score(yt.astype(int), yp.astype(int), average="weighted", zero_division=0)
+            elif metric == "Recall":
+                return recall_score(yt.astype(int), yp.astype(int), average="weighted", zero_division=0)
+        except Exception as e:
+            return f"Error: {e}"
 #NodeEditor App 
 class NodeEditorApp:
     """Owns the DPG viewport and window. Delegates logic to NodeGraph."""
 
     NODE_PALETTE: list[tuple[str, type[BaseNode]]] = [
-        ("Terminal",    TerminalNode),
+        ("Terminal",TerminalNode),
         ("CSV Loader", CSVNode),
-        ("Column Selector", ColumnSelectorNode),
+        ("Column Selector",ColumnSelectorNode),
         ("ANN", ANNNode),
+        ("Train Test Split",TrainTestSplitNode),
+        ("Scaler",ScalerNode),
+        ("Scatter Plot",ScatterPlotNode),
+        ("Network Visualizer",NetworkVisualizerNode),
+        ("Test Metrics", MetricsNode),
+        ("Data Inspector", DataInspectorNode),
+        ("Inverse Scaler", InverseScalerNode),
     ]
 
     EDITOR_TAG = "node_editor"
@@ -1208,6 +2136,10 @@ class NodeEditorApp:
                             callback=self._on_menu_spawn,
                             user_data=cls,
                         )
+
+                with dpg.menu(label="Graph"):
+                    dpg.add_menu_item(label="Save Graph…", callback=self._save_graph)
+                    dpg.add_menu_item(label="Load Graph…", callback=self._load_graph)
 
             dpg.add_button(label="▶  Run Graph",
                            callback=lambda: self.graph.run(),
@@ -1304,6 +2236,135 @@ class NodeEditorApp:
                     self.graph._attr_to_node.pop(attr_id, None)
 
             dpg.delete_item(node_id)
+            
+    def _save_graph(self):
+        with dpg.file_dialog(
+            label="Save Graph",
+            width=500, height=350,
+            show=True,
+            callback=self._on_save_graph,
+            default_filename="graph.json",
+        ):
+            dpg.add_file_extension(".json", color=(0, 200, 255, 255))
+
+    def _on_save_graph(self, sender, app_data):
+        path = app_data.get("file_path_name", "")
+        if path:
+            GraphSerializer.save(self, path)
+            print(f"[Graph] Saved → {path}")
+
+    def _load_graph(self):
+        with dpg.file_dialog(
+            label="Load Graph",
+            width=500, height=350,
+            show=True,
+            callback=self._on_load_graph,
+        ):
+            dpg.add_file_extension(".json", color=(0, 200, 255, 255))
+
+    def _on_load_graph(self, sender, app_data):
+        path = app_data.get("file_path_name", "")
+        if path:
+            GraphSerializer.load(self, path)
+            print(f"[Graph] Loaded ← {path}")
+
+
+class GraphSerializer:
+    """Saves and loads node graph layout to/from JSON."""
+
+    @staticmethod
+    def save(app: "NodeEditorApp", path: str):
+        data = {"nodes": [], "links": []}
+
+        for nid, node in app.graph._nodes.items():
+            pos = dpg.get_item_pos(nid)
+            data["nodes"].append({
+                "type":  type(node).__name__,
+                "pos":   pos,
+            })
+
+        for lid, (out_a, in_a) in app.graph._links.items():
+            # Find which node each attr belongs to
+            out_nid = app.graph._attr_to_node.get(out_a)
+            in_nid  = app.graph._attr_to_node.get(in_a)
+            if out_nid is None or in_nid is None:
+                continue
+
+            out_node = app.graph._nodes[out_nid]
+            in_node  = app.graph._nodes[in_nid]
+
+            # Find pin names
+            out_pin = next(
+                (k for k, v in out_node.output_attrs.items() if v == out_a),
+                "output"
+            )
+            in_pin = next(
+                (k for k, v in in_node.input_attrs.items() if v == in_a),
+                "input"
+            )
+
+            data["links"].append({
+                "from_node": type(out_node).__name__,
+                "from_pos":  dpg.get_item_pos(out_nid),
+                "from_pin":  out_pin,
+                "to_node":   type(in_node).__name__,
+                "to_pos":    dpg.get_item_pos(in_nid),
+                "to_pin":    in_pin,
+            })
+
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2)
+
+    @staticmethod
+    def load(app: "NodeEditorApp", path: str):
+        with open(path) as f:
+            data = json.load(f)
+
+        # Build name → class map from palette
+        cls_map = {cls.__name__: cls
+                   for _, cls in app.NODE_PALETTE}
+
+        # Spawn nodes — track pos → node for link resolution
+        pos_to_node: dict[str, BaseNode] = {}
+
+        for entry in data["nodes"]:
+            cls = cls_map.get(entry["type"])
+            if cls is None:
+                print(f"[Load] Unknown node type: {entry['type']}")
+                continue
+            pos   = tuple(entry["pos"])
+            node  = cls()
+            if hasattr(node, "set_graph"):
+                node.set_graph(app.graph)
+            node.build(parent=app.EDITOR_TAG, pos=pos)
+            app.graph.add_node(node)
+            key = f"{entry['type']}@{pos[0]},{pos[1]}"
+            pos_to_node[key] = node
+
+        # Re-create links
+        for link in data["links"]:
+            from_key = (f"{link['from_node']}@"
+                        f"{link['from_pos'][0]},{link['from_pos'][1]}")
+            to_key   = (f"{link['to_node']}@"
+                        f"{link['to_pos'][0]},{link['to_pos'][1]}")
+
+            from_node = pos_to_node.get(from_key)
+            to_node   = pos_to_node.get(to_key)
+
+            if from_node is None or to_node is None:
+                continue
+
+            out_attr = from_node.output_attrs.get(link["from_pin"])
+            in_attr  = to_node.input_attrs.get(link["to_pin"])
+
+            if out_attr is None or in_attr is None:
+                continue
+
+            link_id = dpg.add_node_link(
+                out_attr, in_attr,
+                parent=app.EDITOR_TAG,
+            )
+            app.graph.add_link(link_id, out_attr, in_attr)
 
 if __name__ == "__main__":
     NodeEditorApp().run()
