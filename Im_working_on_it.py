@@ -1,13 +1,9 @@
 import inspect
 import random
 from abc import ABC, abstractmethod
-
 import dearpygui.dearpygui as dpg
-
 import pandas as pd
-# ══════════════════════════════════════════════════════════════════════════════
-#  THEME
-# ══════════════════════════════════════════════════════════════════════════════
+
 
 class NodeEditorTheme:
     """Centralises all DPG theme calls. Use _s / _c helpers so missing
@@ -79,11 +75,7 @@ class NodeEditorTheme:
             if name.startswith(("mvNodeCol_", "mvNodesStyleVar_")):
                 print(f"  dpg.{name} = {getattr(dpg, name)}")
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  BASE NODE
-# ══════════════════════════════════════════════════════════════════════════════
-
+# Base Node
 class BaseNode(ABC):
     """
     Subclass this to create any new node type.
@@ -141,11 +133,7 @@ class BaseNode(ABC):
         """Override this with the node's logic. Keyword args match input pins."""
         ...
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  CONCRETE NODES  — add new ones here or in separate files
-# ══════════════════════════════════════════════════════════════════════════════
-
+# My Custom Nodes
 class TerminalNode(BaseNode):
     LABEL       = "Terminal"
     TITLE_COLOR = (20, 20, 20, 255)
@@ -329,7 +317,7 @@ class ColumnSelectorNode(BaseNode):
                     width=self.WIDTH,
                     callback=self._refresh_from_upstream,
                 )
-                dpg.add_separator()
+                dpg.add_spacer(height=4)
 
                 # Available columns
                 dpg.add_text("Available columns:", color=(180, 180, 180, 255))
@@ -464,9 +452,7 @@ class ColumnSelectorNode(BaseNode):
 
         return {"X": X, "y": y}
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  NODE GRAPH  — owns registries and execution logic
-# ══════════════════════════════════════════════════════════════════════════════
+#Nodegraph
 
 class NodeGraph:
     """Tracks all live nodes and links; runs the graph on demand."""
@@ -566,10 +552,7 @@ class NodeGraph:
 
         print("─────────────────────\n")
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  APP
-# ══════════════════════════════════════════════════════════════════════════════
-
+#NodeEditor App 
 class NodeEditorApp:
     """Owns the DPG viewport and window. Delegates logic to NodeGraph."""
 
@@ -606,12 +589,12 @@ class NodeEditorApp:
     def _on_right_click(self, sender, app_data):
         if dpg.is_item_hovered(self.EDITOR_TAG):
             pos = dpg.get_mouse_pos(local=False)
-            # FIX 1: use integer ID stored on self — string tags can resolve
+            # use integer ID stored on self — string tags can resolve
             # to 0 (not found) on some DPG versions, crashing set_item_pos.
             dpg.set_item_pos(self._menu_id, pos)
             dpg.configure_item(self._menu_id, show=True)
 
-    # FIX 2: DPG calls callbacks as (sender, app_data, user_data) when
+    # DPG calls callbacks as (sender, app_data, user_data) when
     # user_data is set. Using user_data to pass the class is reliable;
     # default-arg lambdas receive user_data as a 3rd positional arg which
     # overwrites the default, making c=cls resolve to None.
@@ -623,7 +606,7 @@ class NodeEditorApp:
 
     # ── UI build ───────────────────────────────────────────────────────────
     def _build_ui(self):
-        with dpg.window(label="Node Editor", width=800, height=600):
+        with dpg.window(label="Nodeflow", no_title_bar=True, no_resize=True, no_move=True) as self._window_id:
             with dpg.menu_bar():
                 with dpg.menu(label="Add Node"):
                     for label, cls in self.NODE_PALETTE:
@@ -646,7 +629,7 @@ class NodeEditorApp:
 
         # Context menu — stored as int ID, never looked up by string tag
         with dpg.window(show=False, popup=True,
-                        no_title_bar=True, min_size=[1, 1]) as self._menu_id:
+                        no_title_bar=False, min_size=[1, 1]) as self._menu_id:
             for label, cls in self.NODE_PALETTE:
                 dpg.add_menu_item(
                     label=f"Add '{label}'",
@@ -655,22 +638,51 @@ class NodeEditorApp:
                 )
 
         with dpg.handler_registry():
-            dpg.add_mouse_click_handler(
-                button=dpg.mvMouseButton_Right,
-                callback=self._on_right_click,
-            )
+            dpg.add_mouse_click_handler(button=dpg.mvMouseButton_Right, callback=self._on_right_click)
+            dpg.add_key_press_handler(key=dpg.mvKey_Escape, callback=self._on_escape)
+            dpg.add_key_press_handler(key=dpg.mvKey_F11,    callback=self._toggle_fullscreen)
+            
+    def _on_escape(self):
+        if dpg.is_viewport_fullscreen():
+            dpg.toggle_viewport_fullscreen()
 
+    def _toggle_fullscreen(self, *args):
+        dpg.toggle_viewport_fullscreen()
+        self._fit_window_to_viewport()
+
+    def _fit_window_to_viewport(self):
+        w = dpg.get_viewport_client_width()
+        h = dpg.get_viewport_client_height()
+        dpg.set_item_width(self._window_id,  w)
+        dpg.set_item_height(self._window_id, h)
+        dpg.set_item_pos(self._window_id, [0, 0])
+        
     # ── Entry point ────────────────────────────────────────────────────────
     def run(self):
         dpg.create_context()
         NodeEditorTheme.apply_global()
         self._build_ui()
-        dpg.create_viewport(title="Modular Node Editor", width=1000, height=800)
+    
+        # Get actual screen resolution
+        import ctypes
+        user32   = ctypes.windll.user32
+        screen_w = user32.GetSystemMetrics(0)
+        screen_h = user32.GetSystemMetrics(1)
+    
+        dpg.create_viewport(
+            title="Nodeflow",
+            width=screen_w,
+            height=screen_h,
+            min_width=800,
+            min_height=600,
+        )
         dpg.setup_dearpygui()
-        dpg.show_viewport()
+        dpg.set_primary_window(self._window_id, True)
+        dpg.show_viewport(maximized=True)
         dpg.start_dearpygui()
         dpg.destroy_context()
 
-# ══════════════════════════════════════════════════════════════════════════════
+
+
 if __name__ == "__main__":
     NodeEditorApp().run()
