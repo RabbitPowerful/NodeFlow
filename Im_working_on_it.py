@@ -4,6 +4,22 @@ from abc import ABC, abstractmethod
 import dearpygui.dearpygui as dpg
 import pandas as pd
 
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, r2_score
+import numpy as np
+import threading
+
+def hex_to_rgb(hex_color: str, alpha: int = 255) -> tuple:
+    """Convert hex color string to (R, G, B, A) tuple.
+    Accepts '#RRGGBB' or 'RRGGBB' format.
+    """
+    hex_color = hex_color.lstrip('#')
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return (r, g, b, alpha)
 
 class NodeEditorTheme:
     """Centralises all DPG theme calls. Use _s / _c helpers so missing
@@ -452,7 +468,583 @@ class ColumnSelectorNode(BaseNode):
 
         return {"X": X, "y": y}
 
-#Nodegraph
+
+class ANNNode(BaseNode):
+    LABEL       = "ANN"
+    TITLE_COLOR = (50, 90, 160, 255)
+    WIDTH       = 340
+
+    def __init__(self):
+        super().__init__()
+
+        # ── Layer config ──────────────────────────────────────────────────
+        self._layers        = []
+        self._layer_list_id = None
+        self._units_id      = None
+        self._activation_id = None
+
+        # ── Tab state ─────────────────────────────────────────────────────
+        self._tab_btns      = {}
+        self._tab_groups    = {}
+        self._active_tab    = "Layers"
+
+        # ── Training config ───────────────────────────────────────────────
+        self._task_id       = None
+        self._optimizer_id  = None
+        self._lr_id         = None
+        self._epochs_id     = None
+        self._batch_id      = None
+        self._val_split_id  = None
+
+        # ── Regularization config ─────────────────────────────────────────
+        self._dropout_id    = None
+        self._l1_id         = None
+        self._l2_id         = None
+        self._wd_id         = None
+        self._early_stop_id = None
+        self._patience_id   = None
+
+        # ── Status / progress ─────────────────────────────────────────────
+        self._status_id     = None
+        self._progress_id   = None
+
+        # ── Runtime ───────────────────────────────────────────────────────
+        self._model         = None
+        self._scaler_X      = None
+        self._scaler_y      = None
+        self._is_training   = False
+        self._result        = None
+        self._last_X        = None
+        self._last_y        = None
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  BUILD
+    # ══════════════════════════════════════════════════════════════════════
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # ── Input pins ────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("X")
+            self.input_attrs["X"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("y")
+            self.input_attrs["y"] = a
+
+            # ── Body ──────────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+
+                # Manual tab buttons
+                with dpg.group(horizontal=True):
+                    for tab_name in ["Layers", "Training", "Regularization"]:
+                        btn = dpg.add_button(
+                            label=tab_name,
+                            width=self.WIDTH // 3,
+                            callback=self._on_tab_click,
+                            user_data=tab_name,
+                        )
+                        self._tab_btns[tab_name] = btn
+
+                dpg.add_spacer(height=8)
+
+                # Layers tab content
+                with dpg.group(show=True) as g:
+                    self._build_layers_tab()
+                self._tab_groups["Layers"] = g
+
+                # Training tab content
+                with dpg.group(show=False) as g:
+                    self._build_training_tab()
+                self._tab_groups["Training"] = g
+
+                # Regularization tab content
+                with dpg.group(show=False) as g:
+                    self._build_regularization_tab()
+                self._tab_groups["Regularization"] = g
+
+                dpg.add_spacer(height=8)
+
+                # Status + progress
+                self._status_id   = dpg.add_text(
+                    "Ready", color=hex_to_rgb("#555555"))
+                self._progress_id = dpg.add_progress_bar(
+                    default_value=0.0, width=self.WIDTH)
+                dpg.add_spacer(height=4)
+
+                # Train button
+                train_btn = dpg.add_button(
+                    label="TRAIN",
+                    width=self.WIDTH,
+                    height=38,
+                    callback=self._on_train_click,
+                )
+                self._apply_btn_theme(train_btn, hex_to_rgb("#2D6A9F"))
+
+            # ── Output pins ───────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
+                dpg.add_text("predictions")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as b:
+                dpg.add_text("metrics")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as c:
+                dpg.add_text("model")
+
+            self.output_attrs = {"predictions": a, "metrics": b, "model": c}
+            self.output_attr  = None
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        self._refresh_tab_styles()
+        return self.node_id
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  TAB CONTENT — no dpg.tab() wrapper, just plain widgets
+    # ══════════════════════════════════════════════════════════════════════
+    def _build_layers_tab(self):
+        dpg.add_text("Task:", color=hex_to_rgb("#333333"))
+        self._task_id = dpg.add_combo(
+            items=["Classification", "Regression"],
+            default_value="Classification",
+            width=self.WIDTH,
+        )
+        dpg.add_spacer(height=8)
+
+        dpg.add_text("Hidden Layers:", color=hex_to_rgb("#333333"))
+        self._layer_list_id = dpg.add_listbox(
+            items=[],
+            width=self.WIDTH,
+            num_items=5,
+        )
+        dpg.add_spacer(height=6)
+
+        with dpg.group(horizontal=True):
+            dpg.add_text("Units:", color=hex_to_rgb("#555555"))
+            self._units_id = dpg.add_input_int(
+                default_value=64,
+                min_value=1,
+                max_value=4096,
+                width=90,
+            )
+
+        dpg.add_spacer(height=4)
+        with dpg.group(horizontal=True):
+            dpg.add_text("Act:  ", color=hex_to_rgb("#555555"))
+            self._activation_id = dpg.add_combo(
+                items=["ReLU", "Sigmoid", "Tanh", "LeakyReLU", "ELU", "GELU", "None"],
+                default_value="ReLU",
+                width=self.WIDTH - 52,
+            )
+
+        dpg.add_spacer(height=6)
+        with dpg.group(horizontal=True):
+            add_btn = dpg.add_button(
+                label="+ Add Layer",
+                width=self.WIDTH // 2 - 2,
+                callback=self._add_layer,
+            )
+            rem_btn = dpg.add_button(
+                label="- Remove Layer",
+                width=self.WIDTH // 2 - 2,
+                callback=self._remove_layer,
+            )
+            self._apply_btn_theme(add_btn, hex_to_rgb("#4A7C59"))
+            self._apply_btn_theme(rem_btn, hex_to_rgb("#8B4444"))
+
+    def _build_training_tab(self):
+        dpg.add_text("Optimizer:", color=hex_to_rgb("#333333"))
+        self._optimizer_id = dpg.add_combo(
+            items=["Adam", "SGD", "RMSprop", "AdamW", "Adagrad"],
+            default_value="Adam",
+            width=self.WIDTH,
+        )
+        dpg.add_spacer(height=8)
+
+        with dpg.group(horizontal=True):
+            dpg.add_text("Learning Rate:", color=hex_to_rgb("#555555"))
+            self._lr_id = dpg.add_input_float(
+                default_value=0.001,
+                format="%.5f",
+                width=110,
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("Epochs:       ", color=hex_to_rgb("#555555"))
+            self._epochs_id = dpg.add_input_int(
+                default_value=100,
+                min_value=1,
+                width=110,
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("Batch Size:   ", color=hex_to_rgb("#555555"))
+            self._batch_id = dpg.add_input_int(
+                default_value=32,
+                min_value=1,
+                width=110,
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("Val Split:    ", color=hex_to_rgb("#555555"))
+            self._val_split_id = dpg.add_input_float(
+                default_value=0.2,
+                format="%.2f",
+                min_value=0.0,
+                max_value=0.5,
+                width=110,
+            )
+
+    def _build_regularization_tab(self):
+        with dpg.group(horizontal=True):
+            dpg.add_text("Dropout Rate: ", color=hex_to_rgb("#555555"))
+            self._dropout_id = dpg.add_input_float(
+                default_value=0.0,
+                format="%.2f",
+                min_value=0.0,
+                max_value=0.9,
+                width=110,
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("L1 Lambda:    ", color=hex_to_rgb("#555555"))
+            self._l1_id = dpg.add_input_float(
+                default_value=0.0,
+                format="%.5f",
+                width=110,
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("L2 Lambda:    ", color=hex_to_rgb("#555555"))
+            self._l2_id = dpg.add_input_float(
+                default_value=0.0,
+                format="%.5f",
+                width=110,
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_text("Weight Decay: ", color=hex_to_rgb("#555555"))
+            self._wd_id = dpg.add_input_float(
+                default_value=0.0,
+                format="%.5f",
+                width=110,
+            )
+        dpg.add_spacer(height=8)
+        dpg.add_text("Early Stopping:", color=hex_to_rgb("#333333"))
+        self._early_stop_id = dpg.add_checkbox(
+            label="Enable", default_value=False)
+        with dpg.group(horizontal=True):
+            dpg.add_text("Patience:     ", color=hex_to_rgb("#555555"))
+            self._patience_id = dpg.add_input_int(
+                default_value=10,
+                min_value=1,
+                width=110,
+            )
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  TAB SWITCHING
+    # ══════════════════════════════════════════════════════════════════════
+    def _on_tab_click(self, sender, app_data, user_data):
+        self._active_tab = user_data
+        for name, group in self._tab_groups.items():
+            dpg.configure_item(group, show=(name == user_data))
+        self._refresh_tab_styles()
+
+    def _refresh_tab_styles(self):
+        for name, btn in self._tab_btns.items():
+            if name == self._active_tab:
+                self._apply_btn_theme(btn, hex_to_rgb("#2D6A9F"))
+            else:
+                self._apply_btn_theme(btn, hex_to_rgb("#555555"))
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  LAYER MANAGEMENT
+    # ══════════════════════════════════════════════════════════════════════
+    def _layer_str(self, layer):
+        return f"Linear({layer['units']})  {layer['activation']}"
+
+    def _add_layer(self):
+        units      = dpg.get_value(self._units_id)
+        activation = dpg.get_value(self._activation_id)
+        self._layers.append({"units": units, "activation": activation})
+        dpg.configure_item(self._layer_list_id,
+                           items=[self._layer_str(l) for l in self._layers])
+
+    def _remove_layer(self):
+        if not self._layers:
+            return
+        selected = dpg.get_value(self._layer_list_id)
+        for i, layer in enumerate(self._layers):
+            if self._layer_str(layer) == selected:
+                self._layers.pop(i)
+                break
+        else:
+            self._layers.pop()
+        dpg.configure_item(self._layer_list_id,
+                           items=[self._layer_str(l) for l in self._layers])
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  MODEL BUILDING
+    # ══════════════════════════════════════════════════════════════════════
+    def _get_activation(self, name):
+        return {
+            "ReLU":      nn.ReLU(),
+            "Sigmoid":   nn.Sigmoid(),
+            "Tanh":      nn.Tanh(),
+            "LeakyReLU": nn.LeakyReLU(),
+            "ELU":       nn.ELU(),
+            "GELU":      nn.GELU(),
+            "None":      nn.Identity(),
+        }.get(name, nn.ReLU())
+
+    def _build_model(self, input_size, output_size):
+        dropout = dpg.get_value(self._dropout_id)
+        layers  = []
+        prev    = input_size
+
+        for layer in self._layers:
+            layers.append(nn.Linear(prev, layer["units"]))
+            layers.append(self._get_activation(layer["activation"]))
+            if dropout > 0:
+                layers.append(nn.Dropout(p=dropout))
+            prev = layer["units"]
+
+        layers.append(nn.Linear(prev, output_size))
+
+        task = dpg.get_value(self._task_id)
+        if task == "Classification" and output_size == 1:
+            layers.append(nn.Sigmoid())
+        elif task == "Classification" and output_size > 1:
+            layers.append(nn.Softmax(dim=1))
+
+        return nn.Sequential(*layers)
+
+    def _get_optimizer(self, model):
+        name = dpg.get_value(self._optimizer_id)
+        lr   = dpg.get_value(self._lr_id)
+        wd   = dpg.get_value(self._wd_id)
+        return {
+            "Adam":    optim.Adam(model.parameters(),    lr=lr, weight_decay=wd),
+            "SGD":     optim.SGD(model.parameters(),     lr=lr, weight_decay=wd),
+            "RMSprop": optim.RMSprop(model.parameters(), lr=lr, weight_decay=wd),
+            "AdamW":   optim.AdamW(model.parameters(),   lr=lr, weight_decay=wd),
+            "Adagrad": optim.Adagrad(model.parameters(), lr=lr, weight_decay=wd),
+        }.get(name, optim.Adam(model.parameters(), lr=lr))
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  TRAINING
+    # ══════════════════════════════════════════════════════════════════════
+    def _set_status(self, text, color=None):
+        color = color or hex_to_rgb("#555555")
+        dpg.set_value(self._status_id, text)
+        dpg.configure_item(self._status_id, color=color)
+
+    def _on_train_click(self):
+        if self._last_X is None or self._last_y is None:
+            self._set_status("Connect X and y then run graph first.",
+                             hex_to_rgb("#CC4444"))
+            return
+        if self._is_training:
+            self._set_status("Already training...", hex_to_rgb("#CC8800"))
+            return
+        threading.Thread(
+            target=self._train,
+            args=(self._last_X, self._last_y),
+            daemon=True,
+        ).start()
+
+    def _train(self, X_df, y_series):
+        self._is_training = True
+        self._set_status("Preparing data...", hex_to_rgb("#2266AA"))
+
+        try:
+            task        = dpg.get_value(self._task_id)
+            epochs      = dpg.get_value(self._epochs_id)
+            batch_size  = dpg.get_value(self._batch_id)
+            val_split   = dpg.get_value(self._val_split_id)
+            l1_lambda   = dpg.get_value(self._l1_id)
+            l2_lambda   = dpg.get_value(self._l2_id)
+            early_stop  = dpg.get_value(self._early_stop_id)
+            patience    = dpg.get_value(self._patience_id)
+
+            # ── Prepare data ──────────────────────────────────────────────
+            X = X_df.values.astype(np.float32)
+            y = y_series.values.astype(np.float32)
+
+            if task == "Classification":
+                classes     = np.unique(y)
+                n_classes   = len(classes)
+                output_size = 1 if n_classes == 2 else n_classes
+                label_map   = {c: i for i, c in enumerate(classes)}
+                y           = np.array([label_map[v] for v in y],
+                                       dtype=np.float32)
+            else:
+                output_size = 1
+                self._scaler_y = StandardScaler()
+                y = self._scaler_y.fit_transform(
+                    y.reshape(-1, 1)).flatten()
+
+            self._scaler_X = StandardScaler()
+            X = self._scaler_X.fit_transform(X)
+
+            X_train, X_val, y_train, y_val = train_test_split(
+                X, y, test_size=val_split, random_state=42)
+
+            X_train_t = torch.tensor(X_train)
+            y_train_t = torch.tensor(y_train)
+            X_val_t   = torch.tensor(X_val)
+            y_val_t   = torch.tensor(y_val)
+
+            # ── Build model ───────────────────────────────────────────────
+            if not self._layers:
+                self._set_status("Add at least one hidden layer.",
+                                 hex_to_rgb("#CC4444"))
+                self._is_training = False
+                return
+
+            self._model = self._build_model(X.shape[1], output_size)
+            optimizer   = self._get_optimizer(self._model)
+
+            if task == "Classification":
+                criterion = (nn.BCELoss() if output_size == 1
+                             else nn.CrossEntropyLoss())
+            else:
+                criterion = nn.MSELoss()
+
+            dataset    = torch.utils.data.TensorDataset(X_train_t, y_train_t)
+            dataloader = torch.utils.data.DataLoader(
+                dataset, batch_size=batch_size, shuffle=True)
+
+            best_val   = float("inf")
+            pat_count  = 0
+            history    = {"train_loss": [], "val_loss": []}
+
+            # ── Training loop ─────────────────────────────────────────────
+            for epoch in range(epochs):
+                self._model.train()
+                epoch_loss = 0.0
+
+                for X_batch, y_batch in dataloader:
+                    optimizer.zero_grad()
+                    out = self._model(X_batch)
+
+                    if task == "Classification" and output_size == 1:
+                        loss = criterion(out.squeeze(), y_batch)
+                    elif task == "Classification":
+                        loss = criterion(out, y_batch.long())
+                    else:
+                        loss = criterion(out.squeeze(), y_batch)
+
+                    if l1_lambda > 0:
+                        l1 = sum(p.abs().sum()
+                                 for p in self._model.parameters())
+                        loss = loss + l1_lambda * l1
+
+                    if l2_lambda > 0:
+                        l2 = sum(p.pow(2).sum()
+                                 for p in self._model.parameters())
+                        loss = loss + l2_lambda * l2
+
+                    loss.backward()
+                    optimizer.step()
+                    epoch_loss += loss.item()
+
+                # Validation
+                self._model.eval()
+                with torch.no_grad():
+                    val_out = self._model(X_val_t)
+                    if task == "Classification" and output_size == 1:
+                        val_loss = criterion(
+                            val_out.squeeze(), y_val_t).item()
+                    elif task == "Classification":
+                        val_loss = criterion(
+                            val_out, y_val_t.long()).item()
+                    else:
+                        val_loss = criterion(
+                            val_out.squeeze(), y_val_t).item()
+
+                avg_train = epoch_loss / len(dataloader)
+                history["train_loss"].append(avg_train)
+                history["val_loss"].append(val_loss)
+
+                dpg.set_value(self._progress_id, (epoch + 1) / epochs)
+                self._set_status(
+                    f"Epoch {epoch+1}/{epochs}  "
+                    f"train={avg_train:.4f}  val={val_loss:.4f}",
+                    hex_to_rgb("#2266AA"),
+                )
+
+                if early_stop:
+                    if val_loss < best_val:
+                        best_val  = val_loss
+                        pat_count = 0
+                    else:
+                        pat_count += 1
+                        if pat_count >= patience:
+                            self._set_status(
+                                f"Early stop at epoch {epoch+1}",
+                                hex_to_rgb("#CC8800"))
+                            break
+
+            # ── Final evaluation ──────────────────────────────────────────
+            self._model.eval()
+            with torch.no_grad():
+                preds_t = self._model(torch.tensor(X))
+
+            if task == "Classification":
+                if output_size == 1:
+                    preds = (preds_t.squeeze().numpy() > 0.5).astype(int)
+                else:
+                    preds = preds_t.argmax(dim=1).numpy()
+                metric_val  = accuracy_score(y.astype(int), preds)
+                metric_name = "accuracy"
+            else:
+                preds = self._scaler_y.inverse_transform(
+                    preds_t.squeeze().numpy().reshape(-1, 1)).flatten()
+                y_orig = self._scaler_y.inverse_transform(
+                    y.reshape(-1, 1)).flatten()
+                metric_val  = r2_score(y_orig, preds)
+                metric_name = "r2_score"
+
+            self._result = {
+                "predictions": preds,
+                "metrics":     {metric_name: metric_val,
+                                "history":   history},
+                "model":       self._model,
+            }
+            self._set_status(
+                f"Done!  {metric_name} = {metric_val:.4f}",
+                hex_to_rgb("#2A7A2A"))
+
+        except Exception as e:
+            self._set_status(f"Error: {e}", hex_to_rgb("#CC4444"))
+        finally:
+            self._is_training = False
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  EXECUTE
+    # ══════════════════════════════════════════════════════════════════════
+    def execute(self, X=None, y=None):
+        self._last_X = X
+        self._last_y = y
+        if self._result is None:
+            self._set_status("Hit TRAIN to train the model.",
+                             hex_to_rgb("#888888"))
+            return {"predictions": None, "metrics": None, "model": None}
+        return self._result
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THEME HELPER
+    # ══════════════════════════════════════════════════════════════════════
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,
+                                    color,   category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                    darker,  category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                    darkest, category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
 
 class NodeGraph:
     """Tracks all live nodes and links; runs the graph on demand."""
@@ -560,6 +1152,7 @@ class NodeEditorApp:
         ("Terminal",    TerminalNode),
         ("CSV Loader", CSVNode),
         ("Column Selector", ColumnSelectorNode),
+        ("ANN", ANNNode),
     ]
 
     EDITOR_TAG = "node_editor"
