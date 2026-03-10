@@ -25,22 +25,22 @@ class NodeEditorTheme:
     def apply_global(cls):
         with dpg.theme() as theme:
             with dpg.theme_component(dpg.mvNodeEditor):
-                cls._c("mvNodeCol_GridBackground",     (20,  20,  30, 255))
-                cls._c("mvNodeCol_GridLine",           (60,  60,  80, 120))
-                cls._c("mvNodeCol_Link",               (100, 200, 255, 200))
-                cls._c("mvNodeCol_LinkHovered",        (150, 230, 255, 255))
-                cls._c("mvNodeCol_LinkSelected",       (255, 220, 100, 255))
-                cls._c("mvNodeCol_BoxSelector",        (100, 180, 255,  50))
-                cls._c("mvNodeCol_BoxSelectorOutline", (100, 180, 255, 180))
-                cls._s("mvNodesStyleVar_GridSpacing",              24)
-                cls._s("mvNodesStyleVar_LinkThickness",             2)
-                cls._s("mvNodesStyleVar_LinkLineSegmentsPerLength", 0.1)
-                cls._s("mvNodesStyleVar_LinkHoverDistance",         10)
-                cls._s("mvNodesStyleVar_PinCircleRadius",           5)
-                cls._s("mvNodesStyleVar_PinLineThickness",          2)
+                cls._c("mvNodeCol_GridBackground",     (237, 237, 240, 255))  # warm light gray
+                cls._c("mvNodeCol_GridLine",           (237, 237, 240, 255))  # same as bg = invisible grid
+                cls._c("mvNodeCol_Link",               ( 40,  40,  45, 200))  # near-black thin wires
+                cls._c("mvNodeCol_LinkHovered",        ( 80, 180, 170, 255))  # teal on hover (matches ref)
+                cls._c("mvNodeCol_LinkSelected",       ( 80, 180, 170, 255))  # teal when selected
+                cls._c("mvNodeCol_BoxSelector",        ( 80, 180, 170,  30))
+                cls._c("mvNodeCol_BoxSelectorOutline", ( 80, 180, 170, 160))
+                cls._s("mvNodesStyleVar_GridSpacing",               28)
+                cls._s("mvNodesStyleVar_LinkThickness",              1)        # thin like reference
+                cls._s("mvNodesStyleVar_LinkLineSegmentsPerLength",  0.03)    # smooth bezier
+                cls._s("mvNodesStyleVar_LinkHoverDistance",         12)
+                cls._s("mvNodesStyleVar_PinCircleRadius",            4)
+                cls._s("mvNodesStyleVar_PinLineThickness",           1)
                 cls._s("mvNodesStyleVar_PinHoverRadius",            10)
-                cls._s("mvNodesStyleVar_PinOffset",                 0)
-
+                cls._s("mvNodesStyleVar_PinOffset",                  0)
+                
             with dpg.theme_component(dpg.mvNode):
                 cls._c("mvNodeCol_TitleBar",                (40,  90, 140, 255))
                 cls._c("mvNodeCol_TitleBarHovered",         (55, 115, 175, 255))
@@ -626,7 +626,11 @@ class NodeEditorApp:
                 callback=self._on_link,
                 delink_callback=self._on_delink,
             )
-
+        # In _build_ui(), inside your existing handler_registry block:
+        with dpg.handler_registry():
+            dpg.add_mouse_click_handler(button=dpg.mvMouseButton_Right, callback=self._on_right_click)
+            dpg.add_key_press_handler(key=dpg.mvKey_Delete, callback=self._delete_selected)
+            
         # Context menu — stored as int ID, never looked up by string tag
         with dpg.window(show=False, popup=True,
                         no_title_bar=False, min_size=[1, 1]) as self._menu_id:
@@ -662,27 +666,51 @@ class NodeEditorApp:
         dpg.create_context()
         NodeEditorTheme.apply_global()
         self._build_ui()
-    
-        # Get actual screen resolution
-        import ctypes
-        user32   = ctypes.windll.user32
-        screen_w = user32.GetSystemMetrics(0)
-        screen_h = user32.GetSystemMetrics(1)
-    
         dpg.create_viewport(
             title="Nodeflow",
-            width=screen_w,
-            height=screen_h,
+            width=1280,
+            height=720,
             min_width=800,
             min_height=600,
         )
         dpg.setup_dearpygui()
         dpg.set_primary_window(self._window_id, True)
-        dpg.show_viewport(maximized=True)
+        dpg.show_viewport(maximized=True)   # ← maximized but keeps OS chrome
         dpg.start_dearpygui()
         dpg.destroy_context()
 
+    def _delete_selected(self):
+        selected_nodes = dpg.get_selected_nodes(self.EDITOR_TAG)
+        selected_links = dpg.get_selected_links(self.EDITOR_TAG)
 
+        # Delete selected links first
+        for link_id in selected_links:
+            dpg.delete_item(link_id)
+            self.graph.remove_link(link_id)
+
+        # Delete selected nodes + clean up their links
+        for node_id in selected_nodes:
+            # Remove any links connected to this node before deleting it
+            connected = [
+                lid for lid, (out_a, in_a) in self.graph._links.items()
+                if self.graph._attr_to_node.get(out_a) == node_id
+                or self.graph._attr_to_node.get(in_a)  == node_id
+            ]
+            for lid in connected:
+                dpg.delete_item(lid)
+                self.graph.remove_link(lid)
+
+            # Remove from graph registry
+            node = self.graph._nodes.pop(node_id, None)
+            if node:
+                if node.output_attr is not None:
+                    self.graph._attr_to_node.pop(node.output_attr, None)
+                for attr_id in node.input_attrs.values():
+                    self.graph._attr_to_node.pop(attr_id, None)
+                for attr_id in node.output_attrs.values():
+                    self.graph._attr_to_node.pop(attr_id, None)
+
+            dpg.delete_item(node_id)
 
 if __name__ == "__main__":
     NodeEditorApp().run()
