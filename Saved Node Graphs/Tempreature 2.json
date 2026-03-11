@@ -1,0 +1,307 @@
+{
+  "nodes": [
+    {
+      "type": "CSVNode",
+      "pos": [
+        198,
+        186
+      ]
+    },
+    {
+      "type": "ColumnSelectorNode",
+      "pos": [
+        558,
+        186
+      ]
+    },
+    {
+      "type": "ScalerNode",
+      "pos": [
+        1259,
+        318
+      ]
+    },
+    {
+      "type": "ScalerNode",
+      "pos": [
+        1261,
+        501
+      ]
+    },
+    {
+      "type": "ScalerNode",
+      "pos": [
+        1267,
+        684
+      ]
+    },
+    {
+      "type": "ANNNode",
+      "pos": [
+        1714,
+        365
+      ]
+    },
+    {
+      "type": "NetworkVisualizerNode",
+      "pos": [
+        2459,
+        669
+      ]
+    },
+    {
+      "type": "MetricsNode",
+      "pos": [
+        2467,
+        1149
+      ]
+    },
+    {
+      "type": "InverseScalerNode",
+      "pos": [
+        2181,
+        899
+      ]
+    },
+    {
+      "type": "TemporalSplitNode",
+      "pos": [
+        875,
+        308
+      ]
+    },
+    {
+      "type": "ScatterPlotNode",
+      "pos": [
+        2451,
+        228
+      ]
+    }
+  ],
+  "links": [
+    {
+      "from_node": "ScalerNode",
+      "from_pos": [
+        1259,
+        318
+      ],
+      "from_pin": "X_scaled",
+      "to_node": "ANNNode",
+      "to_pos": [
+        1714,
+        365
+      ],
+      "to_pin": "X"
+    },
+    {
+      "from_node": "ScalerNode",
+      "from_pos": [
+        1267,
+        684
+      ],
+      "from_pin": "X_scaled",
+      "to_node": "ANNNode",
+      "to_pos": [
+        1714,
+        365
+      ],
+      "to_pin": "y"
+    },
+    {
+      "from_node": "ScalerNode",
+      "from_pos": [
+        1261,
+        501
+      ],
+      "from_pin": "X_scaled",
+      "to_node": "ANNNode",
+      "to_pos": [
+        1714,
+        365
+      ],
+      "to_pin": "X_test"
+    },
+    {
+      "from_node": "ANNNode",
+      "from_pos": [
+        1714,
+        365
+      ],
+      "from_pin": "model",
+      "to_node": "NetworkVisualizerNode",
+      "to_pos": [
+        2459,
+        669
+      ],
+      "to_pin": "model"
+    },
+    {
+      "from_node": "InverseScalerNode",
+      "from_pos": [
+        2181,
+        899
+      ],
+      "from_pin": "X_original",
+      "to_node": "MetricsNode",
+      "to_pos": [
+        2467,
+        1149
+      ],
+      "to_pin": "predictions"
+    },
+    {
+      "from_node": "ANNNode",
+      "from_pos": [
+        1714,
+        365
+      ],
+      "from_pin": "predictions",
+      "to_node": "InverseScalerNode",
+      "to_pos": [
+        2181,
+        899
+      ],
+      "to_pin": "X_scaled"
+    },
+    {
+      "from_node": "ScalerNode",
+      "from_pos": [
+        1267,
+        684
+      ],
+      "from_pin": "scaler",
+      "to_node": "InverseScalerNode",
+      "to_pos": [
+        2181,
+        899
+      ],
+      "to_pin": "scaler"
+    },
+    {
+      "from_node": "CSVNode",
+      "from_pos": [
+        198,
+        186
+      ],
+      "from_pin": "output",
+      "to_node": "ColumnSelectorNode",
+      "to_pos": [
+        558,
+        186
+      ],
+      "to_pin": "data"
+    },
+    {
+      "from_node": "ColumnSelectorNode",
+      "from_pos": [
+        558,
+        186
+      ],
+      "from_pin": "X",
+      "to_node": "TemporalSplitNode",
+      "to_pos": [
+        875,
+        308
+      ],
+      "to_pin": "X"
+    },
+    {
+      "from_node": "ColumnSelectorNode",
+      "from_pos": [
+        558,
+        186
+      ],
+      "from_pin": "y",
+      "to_node": "TemporalSplitNode",
+      "to_pos": [
+        875,
+        308
+      ],
+      "to_pin": "y"
+    },
+    {
+      "from_node": "TemporalSplitNode",
+      "from_pos": [
+        875,
+        308
+      ],
+      "from_pin": "X_train",
+      "to_node": "ScalerNode",
+      "to_pos": [
+        1259,
+        318
+      ],
+      "to_pin": "X"
+    },
+    {
+      "from_node": "TemporalSplitNode",
+      "from_pos": [
+        875,
+        308
+      ],
+      "from_pin": "X_test",
+      "to_node": "ScalerNode",
+      "to_pos": [
+        1261,
+        501
+      ],
+      "to_pin": "X"
+    },
+    {
+      "from_node": "TemporalSplitNode",
+      "from_pos": [
+        875,
+        308
+      ],
+      "from_pin": "y_train",
+      "to_node": "ScalerNode",
+      "to_pos": [
+        1267,
+        684
+      ],
+      "to_pin": "X"
+    },
+    {
+      "from_node": "TemporalSplitNode",
+      "from_pos": [
+        875,
+        308
+      ],
+      "from_pin": "y_test",
+      "to_node": "MetricsNode",
+      "to_pos": [
+        2467,
+        1149
+      ],
+      "to_pin": "y_true"
+    },
+    {
+      "from_node": "TemporalSplitNode",
+      "from_pos": [
+        875,
+        308
+      ],
+      "from_pin": "y_test",
+      "to_node": "ScatterPlotNode",
+      "to_pos": [
+        2451,
+        228
+      ],
+      "to_pin": "y_test"
+    },
+    {
+      "from_node": "InverseScalerNode",
+      "from_pos": [
+        2181,
+        899
+      ],
+      "from_pin": "X_original",
+      "to_node": "ScatterPlotNode",
+      "to_pos": [
+        2451,
+        228
+      ],
+      "to_pin": "predictions"
+    }
+  ]
+}
