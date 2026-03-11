@@ -12,6 +12,12 @@ from sklearn.metrics import accuracy_score, r2_score
 import numpy as np
 import threading
 import json
+import matplotlib
+matplotlib.use("Agg")  # non-interactive backend — must be before pyplot import
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+from io import BytesIO
+from PIL import Image
 
 def hex_to_rgb(hex_color: str, alpha: int = 255) -> tuple:
     """Convert hex color string to (R, G, B, A) tuple.
@@ -1958,6 +1964,7 @@ class ANNNode(BaseNode):
                              hex_to_rgb("#2A7A2A"))
         except Exception as e:
             self._set_status(f"Load error: {e}", hex_to_rgb("#CC4444"))
+
 class NodeGraph:
     """Tracks all live nodes and links; runs the graph on demand."""
 
@@ -2055,24 +2062,84 @@ class NodeGraph:
             print(f"  [{node.LABEL}({args_str})] → {result}")
 
         print("─────────────────────\n")
+
+
 #Custom Visualization Nodes:
-class ScatterPlotNode(BaseNode):
-    LABEL       = "Scatter Plot"
-    TITLE_COLOR = (40, 140, 120, 255)
-    WIDTH       = 300
-    HEIGHT      = 300
+class MatplotlibNodeBase(BaseNode):
+    """Base class for any node that renders a matplotlib figure
+    inside a DPG texture and allows PNG export."""
+
+    PLOT_W = 320   # pixels
+    PLOT_H = 260
 
     def __init__(self):
         super().__init__()
-        self._plot_id    = None
-        self._series_id  = None
-        self._line_id    = None
-        self._status_id  = None
+        self._texture_id  = None
+        self._image_id    = None
+        self._last_fig    = None   # keep reference for saving
+
+    def _register_texture(self):
+        """Register a blank texture — call this inside build()."""
+        blank = np.zeros((self.PLOT_H, self.PLOT_W, 4), dtype=np.float32)
+        flat  = blank.flatten().tolist()
+        with dpg.texture_registry():
+            self._texture_id = dpg.add_dynamic_texture(
+                width=self.PLOT_W, height=self.PLOT_H,
+                default_value=flat,
+            )
+
+    def _render_figure(self, fig):
+        """Convert a matplotlib figure to a DPG texture and update it."""
+        self._last_fig = fig
+
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=100,
+                    bbox_inches="tight", facecolor=fig.get_facecolor())
+        buf.seek(0)
+        img = Image.open(buf).convert("RGBA").resize(
+            (self.PLOT_W, self.PLOT_H), Image.LANCZOS)
+        plt.close(fig)
+
+        arr  = np.array(img).astype(np.float32) / 255.0
+        flat = arr.flatten().tolist()
+        dpg.set_value(self._texture_id, flat)
+
+    def _save_png(self):
+        if self._last_fig is None:
+            return
+        with dpg.file_dialog(
+            label="Save PNG",
+            width=500, height=350,
+            show=True,
+            callback=self._on_save_png,
+            default_filename="plot.png",
+        ):
+            dpg.add_file_extension(".png", color=(0, 200, 255, 255))
+            dpg.add_file_extension(".*",   color=(200, 200, 200, 255))
+
+    def _on_save_png(self, sender, app_data):
+        path = app_data.get("file_path_name", "")
+        if not path:
+            return
+        if not path.endswith(".png"):
+            path += ".png"
+        self._last_fig.savefig(path, dpi=150, bbox_inches="tight")
+        print(f"[Plot] Saved → {path}")
+
+class ScatterPlotNode(MatplotlibNodeBase):
+    LABEL       = "Scatter Plot"
+    TITLE_COLOR = (35, 140, 100, 255)
+    WIDTH       = 320
+
+    def __init__(self):
+        super().__init__()
+        self._status_id = None
 
     def build(self, parent, pos=(10, 10)):
+        self._register_texture()
+
         with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
 
-            # ── Input pins ────────────────────────────────────────────────
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
                 dpg.add_text("y_test")
             self.input_attrs["y_test"] = a
@@ -2081,78 +2148,83 @@ class ScatterPlotNode(BaseNode):
                 dpg.add_text("predictions")
             self.input_attrs["predictions"] = a
 
-            # ── Plot ──────────────────────────────────────────────────────
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
                 dpg.add_spacer(height=4)
                 self._status_id = dpg.add_text(
-                    "Connect y_test and predictions",
-                    color=hex_to_rgb("#888888"),
-                )
+                    "Waiting for data...", color=hex_to_rgb("#888888"))
                 dpg.add_spacer(height=4)
-
-                with dpg.plot(
-                    label="Actual vs Predicted",
+                self._image_id = dpg.add_image(self._texture_id)
+                dpg.add_spacer(height=4)
+                save_btn = dpg.add_button(
+                    label="Save PNG",
                     width=self.WIDTH,
-                    height=self.HEIGHT,
-                    no_title=False,
-                ) as self._plot_id:
-                    dpg.add_plot_legend()
-                    x_axis = dpg.add_plot_axis(dpg.mvXAxis, label="Actual")
-                    y_axis = dpg.add_plot_axis(dpg.mvYAxis, label="Predicted")
+                    callback=self._save_png,
+                )
+                self._apply_btn_theme(save_btn, hex_to_rgb("#2A5A2A"))
 
-                    # Scatter series — starts empty
-                    self._series_id = dpg.add_scatter_series(
-                        [], [],
-                        label="Predictions",
-                        parent=y_axis,
-                    )
-                    # Perfect prediction line y=x
-                    self._line_id = dpg.add_line_series(
-                        [], [],
-                        label="Perfect fit",
-                        parent=y_axis,
-                    )
+            self.output_attr  = None
+            self.output_attrs = {}
 
         NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
         return self.node_id
 
     def execute(self, y_test=None, predictions=None):
         if y_test is None or predictions is None:
-            dpg.set_value(self._status_id, "Waiting for data...")
-            dpg.configure_item(self._status_id, color=hex_to_rgb("#888888"))
             return None
-
         try:
-            # Convert to plain python lists for DPG
-            y_true = list(map(float, y_test))
-            y_pred = list(map(float, predictions))
+            yt = np.array(y_test).flatten()
+            yp = np.array(predictions).flatten()
+            mn, mx = min(yt.min(), yp.min()), max(yt.max(), yp.max())
 
-            # Update scatter
-            dpg.set_value(self._series_id, [y_true, y_pred])
+            fig, ax = plt.subplots(figsize=(4, 3.2),
+                                   facecolor="#1a1a2e")
+            ax.set_facecolor("#16213e")
+            ax.scatter(yt, yp, alpha=0.4, s=6,
+                       color="#00C8C8", label="Predictions")
+            ax.plot([mn, mx], [mn, mx],
+                    color="#FF6B6B", linewidth=1.5, label="Perfect fit")
+            ax.set_xlabel("Actual",    color="white", fontsize=9)
+            ax.set_ylabel("Predicted", color="white", fontsize=9)
+            ax.set_title("Actual vs Predicted", color="white", fontsize=10)
+            ax.tick_params(colors="white", labelsize=8)
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#444466")
+            ax.legend(fontsize=8, facecolor="#1a1a2e",
+                      labelcolor="white", framealpha=0.8)
+            fig.tight_layout()
 
-            # Update perfect fit line across data range
-            mn = min(y_true)
-            mx = max(y_true)
-            dpg.set_value(self._line_id, [[mn, mx], [mn, mx]])
+            self._render_figure(fig)
 
-            # Fit axes to data
-            dpg.fit_axis_data(dpg.get_item_parent(self._series_id))
-            dpg.fit_axis_data(dpg.get_item_parent(self._line_id))
-
-            # Compute R2 for status
-            ss_res = sum((a - b) ** 2 for a, b in zip(y_true, y_pred))
-            mean_y = sum(y_true) / len(y_true)
-            ss_tot = sum((a - mean_y) ** 2 for a in y_true)
-            r2     = 1 - ss_res / ss_tot if ss_tot != 0 else 0.0
-
-            dpg.set_value(self._status_id, f"R² = {r2:.4f}  n={len(y_true)}")
-            dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
-
+            ss_res  = np.sum((yt - yp) ** 2)
+            ss_tot  = np.sum((yt - yt.mean()) ** 2)
+            r2      = 1 - ss_res / ss_tot if ss_tot != 0 else 0
+            dpg.set_value(self._status_id,
+                f"R² = {r2:.4f}  n={len(yt)}")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#2A7A2A"))
         except Exception as e:
             dpg.set_value(self._status_id, f"Error: {e}")
-            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
-
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#CC4444"))
         return None
+
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,    color,
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,  darker,
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,   darkest,
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
 
 class DataInspectorNode(BaseNode):
     LABEL       = "Data Inspector"
@@ -2612,6 +2684,954 @@ class MetricsNode(BaseNode):
                 return recall_score(yt.astype(int), yp.astype(int), average="weighted", zero_division=0)
         except Exception as e:
             return f"Error: {e}"
+
+class LossCurveNode(MatplotlibNodeBase):
+    LABEL       = "Loss Curve"
+    TITLE_COLOR = (35, 140, 100, 255)
+    WIDTH       = 320
+
+    def __init__(self):
+        super().__init__()
+        self._status_id = None
+
+    def build(self, parent, pos=(10, 10)):
+        self._register_texture()
+
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("metrics")
+            self.input_attrs["metrics"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+                self._status_id = dpg.add_text(
+                    "Connect metrics pin",
+                    color=hex_to_rgb("#888888"))
+                dpg.add_spacer(height=4)
+                self._image_id = dpg.add_image(self._texture_id)
+                dpg.add_spacer(height=4)
+                save_btn = dpg.add_button(
+                    label="Save PNG",
+                    width=self.WIDTH,
+                    callback=self._save_png,
+                )
+                self._apply_btn_theme(save_btn, hex_to_rgb("#2A5A2A"))
+
+            self.output_attr  = None
+            self.output_attrs = {}
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    def execute(self, metrics=None):
+        if metrics is None:
+            return None
+        try:
+            history    = metrics.get("history", {})
+            train_loss = history.get("train_loss", [])
+            val_loss   = history.get("val_loss",   [])
+
+            if not train_loss:
+                dpg.set_value(self._status_id,
+                              "No history — train model first.")
+                return None
+
+            epochs = range(1, len(train_loss) + 1)
+            fig, ax = plt.subplots(figsize=(4, 3.2),
+                                   facecolor="#1a1a2e")
+            ax.set_facecolor("#16213e")
+            ax.plot(epochs, train_loss,
+                    color="#00C8C8", linewidth=1.5, label="Train loss")
+            if val_loss:
+                ax.plot(epochs, val_loss,
+                        color="#FF6B6B", linewidth=1.5,
+                        linestyle="--", label="Val loss")
+            ax.set_xlabel("Epoch",  color="white", fontsize=9)
+            ax.set_ylabel("Loss",   color="white", fontsize=9)
+            ax.set_title("Training Loss Curve",
+                         color="white", fontsize=10)
+            ax.tick_params(colors="white", labelsize=8)
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#444466")
+            ax.legend(fontsize=8, facecolor="#1a1a2e",
+                      labelcolor="white", framealpha=0.8)
+            fig.tight_layout()
+
+            self._render_figure(fig)
+            dpg.set_value(self._status_id,
+                f"{len(train_loss)} epochs  "
+                f"final loss={train_loss[-1]:.4f}")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#2A7A2A"))
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#CC4444"))
+        return None
+
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,    color,
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,  darker,
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,   darkest,
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
+
+#Feature Selection
+class ReliefFNode(MatplotlibNodeBase):
+    LABEL       = "ReliefF"
+    TITLE_COLOR = (180, 100, 30, 255)
+    WIDTH       = 300
+
+    def __init__(self):
+        super().__init__()
+        self._n_neighbors_id  = None
+        self._n_features_id   = None
+        self._mode_id         = None
+        self._status_id       = None
+        self._progress_id     = None
+        self._scores_list_id  = None
+        self._last_scores     = None
+        self._last_features   = None
+        self._last_X          = None
+        self._last_y          = None
+        self._X_selected      = None
+        self._selected_names  = None
+        self._is_running      = False
+
+    def build(self, parent, pos=(10, 10)):
+        self._register_texture()
+
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # ── Input pins ────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("X")
+            self.input_attrs["X"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("y")
+            self.input_attrs["y"] = a
+
+            # ── Body ──────────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+
+                dpg.add_text("Mode:", color=hex_to_rgb("#333333"))
+                self._mode_id = dpg.add_combo(
+                    items=["RReliefF (regression)",
+                           "ReliefF (classification)"],
+                    default_value="RReliefF (regression)",
+                    width=self.WIDTH,
+                )
+                dpg.add_spacer(height=6)
+
+                with dpg.group(horizontal=True):
+                    dpg.add_text("Neighbors:  ", color=hex_to_rgb("#555555"))
+                    self._n_neighbors_id = dpg.add_input_int(
+                        default_value=10,
+                        min_value=1,
+                        max_value=100,
+                        width=80,
+                    )
+
+                with dpg.group(horizontal=True):
+                    dpg.add_text("Top N out:  ", color=hex_to_rgb("#555555"))
+                    self._n_features_id = dpg.add_input_int(
+                        default_value=10,
+                        min_value=1,
+                        max_value=999,
+                        width=80,
+                    )
+                dpg.add_text("(set high to keep all features)",
+                             color=hex_to_rgb("#888888"))
+                dpg.add_spacer(height=6)
+
+                # Run button
+                run_btn = dpg.add_button(
+                    label="Run ReliefF",
+                    width=self.WIDTH,
+                    height=34,
+                    callback=self._on_run_click,
+                )
+                self._apply_btn_theme(run_btn, hex_to_rgb("#7A5A20"))
+                dpg.add_spacer(height=6)
+
+                # Progress
+                self._status_id = dpg.add_text(
+                    "Connect X and y then hit Run",
+                    color=hex_to_rgb("#888888"),
+                )
+                self._progress_id = dpg.add_progress_bar(
+                    default_value=0.0,
+                    width=self.WIDTH,
+                )
+                dpg.add_spacer(height=6)
+
+                # Scores listbox
+                dpg.add_text("Feature Scores (ranked):",
+                             color=hex_to_rgb("#333333"))
+                self._scores_list_id = dpg.add_listbox(
+                    items=[],
+                    width=self.WIDTH,
+                    num_items=8,
+                )
+                dpg.add_spacer(height=6)
+
+                # Plot button
+                plot_btn = dpg.add_button(
+                    label="Plot Bar Chart",
+                    width=self.WIDTH,
+                    height=32,
+                    callback=self._plot_scores,
+                )
+                self._apply_btn_theme(plot_btn, hex_to_rgb("#4A4A8A"))
+                dpg.add_spacer(height=4)
+
+                # Image canvas
+                self._image_id = dpg.add_image(self._texture_id)
+                dpg.add_spacer(height=4)
+
+                # Save PNG button
+                save_btn = dpg.add_button(
+                    label="Save PNG",
+                    width=self.WIDTH,
+                    height=32,
+                    callback=self._save_png,
+                )
+                self._apply_btn_theme(save_btn, hex_to_rgb("#2A5A2A"))
+
+            # ── Output pins ───────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
+                dpg.add_text("X_selected")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as b:
+                dpg.add_text("feature_names")
+
+            self.output_attrs = {
+                "X_selected":    a,
+                "feature_names": b,
+            }
+            self.output_attr = None
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  RUN
+    # ══════════════════════════════════════════════════════════════════════
+    def _set_status(self, text, color=None):
+        color = color or hex_to_rgb("#555555")
+        dpg.set_value(self._status_id, text)
+        dpg.configure_item(self._status_id, color=color)
+
+    def _on_run_click(self):
+        if self._last_X is None or self._last_y is None:
+            self._set_status("Connect X and y then run graph first.",
+                             hex_to_rgb("#CC4444"))
+            return
+        if self._is_running:
+            self._set_status("Already running...", hex_to_rgb("#CC8800"))
+            return
+        threading.Thread(target=self._compute, daemon=True).start()
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  RELIEFF ALGORITHMS
+    # ══════════════════════════════════════════════════════════════════════
+    def _rrelieff(self, X, y, n_neighbors):
+        """RReliefF for regression — pure numpy implementation."""
+        n_samples, n_features = X.shape
+        weights = np.zeros(n_features)
+
+        y_min, y_max = y.min(), y.max()
+        y_norm = (y - y_min) / (y_max - y_min + 1e-10)
+
+        X_min  = X.min(axis=0)
+        X_max  = X.max(axis=0)
+        X_norm = (X - X_min) / (X_max - X_min + 1e-10)
+
+        for i in range(n_samples):
+            # Update progress every 50 samples
+            if i % 50 == 0:
+                progress = i / n_samples
+                dpg.set_value(self._progress_id, progress)
+                self._set_status(
+                    f"Processing sample {i}/{n_samples}...",
+                    hex_to_rgb("#2266AA"),
+                )
+
+            diffs    = X_norm - X_norm[i]
+            dists    = np.sqrt((diffs ** 2).sum(axis=1))
+            dists[i] = np.inf
+            nn_idx   = np.argsort(dists)[:n_neighbors]
+
+            for j in nn_idx:
+                y_diff   = abs(y_norm[i] - y_norm[j])
+                x_diffs  = np.abs(X_norm[i] - X_norm[j])
+                weights += y_diff * x_diffs
+
+        weights /= (n_samples * n_neighbors)
+        return weights
+
+    def _relieff_classification(self, X, y, n_neighbors):
+        """ReliefF for classification — pure numpy implementation."""
+        n_samples, n_features = X.shape
+        weights     = np.zeros(n_features)
+        classes     = np.unique(y)
+        class_prior = {c: np.mean(y == c) for c in classes}
+
+        X_min  = X.min(axis=0)
+        X_max  = X.max(axis=0)
+        X_norm = (X - X_min) / (X_max - X_min + 1e-10)
+
+        for i in range(n_samples):
+            if i % 50 == 0:
+                progress = i / n_samples
+                dpg.set_value(self._progress_id, progress)
+                self._set_status(
+                    f"Processing sample {i}/{n_samples}...",
+                    hex_to_rgb("#2266AA"),
+                )
+
+            diffs    = X_norm - X_norm[i]
+            dists    = np.sqrt((diffs ** 2).sum(axis=1))
+            dists[i] = np.inf
+            nn_idx   = np.argsort(dists)[:n_neighbors * len(classes)]
+
+            for j in nn_idx:
+                x_diffs = np.abs(X_norm[i] - X_norm[j])
+                if y[j] == y[i]:
+                    weights -= x_diffs / (n_samples * n_neighbors)
+                else:
+                    prob     = (class_prior[y[j]] /
+                                (1 - class_prior[y[i]] + 1e-10))
+                    weights += (prob * x_diffs /
+                                (n_samples * n_neighbors))
+
+        return weights
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  COMPUTE THREAD
+    # ══════════════════════════════════════════════════════════════════════
+    def _compute(self):
+        self._is_running = True
+        dpg.set_value(self._progress_id, 0.0)
+        self._set_status("Starting...", hex_to_rgb("#2266AA"))
+
+        try:
+            import pandas as pd
+            X_raw = self._last_X
+            y_raw = self._last_y
+
+            # Get feature names
+            if isinstance(X_raw, pd.DataFrame):
+                feature_names = list(X_raw.columns)
+            else:
+                n_cols        = np.array(X_raw).shape[1]
+                feature_names = [f"feature_{i}" for i in range(n_cols)]
+
+            X = np.array(X_raw).astype(np.float64)
+            y = np.array(y_raw).astype(np.float64).flatten()
+
+            n_neighbors = dpg.get_value(self._n_neighbors_id)
+            mode        = dpg.get_value(self._mode_id)
+            n_out       = dpg.get_value(self._n_features_id)
+
+            # Run algorithm
+            if "RReliefF" in mode:
+                weights = self._rrelieff(X, y, n_neighbors)
+            else:
+                weights = self._relieff_classification(
+                    X, y.astype(int), n_neighbors)
+
+            # Rank features
+            ranked_idx    = np.argsort(weights)[::-1]
+            ranked_names  = [feature_names[i] for i in ranked_idx]
+            ranked_scores = weights[ranked_idx]
+
+            self._last_scores   = ranked_scores
+            self._last_features = ranked_names
+
+            # Update listbox
+            items = [
+                f"{i+1:2}. {ranked_names[i]:<20}  {ranked_scores[i]:+.6f}"
+                for i in range(len(ranked_names))
+            ]
+            dpg.configure_item(self._scores_list_id, items=items)
+
+            # Store selected outputs
+            n_out = min(n_out, len(ranked_names))
+            self._selected_names = ranked_names[:n_out]
+            self._X_selected = (
+                self._last_X[self._selected_names]
+                if isinstance(self._last_X, pd.DataFrame)
+                else X[:, ranked_idx[:n_out]]
+            )
+
+            dpg.set_value(self._progress_id, 1.0)
+            self._set_status(
+                f"Done — top {n_out} / {len(ranked_names)} features selected",
+                hex_to_rgb("#2A7A2A"),
+            )
+
+            # Auto-plot after computing
+            self._plot_scores()
+
+        except Exception as e:
+            self._set_status(f"Error: {e}", hex_to_rgb("#CC4444"))
+            dpg.set_value(self._progress_id, 0.0)
+        finally:
+            self._is_running = False
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  PLOT
+    # ══════════════════════════════════════════════════════════════════════
+    def _plot_scores(self):
+        if self._last_scores is None or self._last_features is None:
+            self._set_status("Run ReliefF first.", hex_to_rgb("#CC4444"))
+            return
+        try:
+            scores = self._last_scores
+            names  = self._last_features
+            n      = len(names)
+            colors = ["#00C8C8" if s >= 0 else "#FF6B6B" for s in scores]
+
+            fig_h  = max(3.5, n * 0.28)
+            fig, ax = plt.subplots(figsize=(4.2, fig_h),
+                                   facecolor="#1a1a2e")
+            ax.set_facecolor("#16213e")
+            ax.barh(range(n), scores, color=colors,
+                    edgecolor="none", height=0.7)
+            ax.set_yticks(range(n))
+            ax.set_yticklabels(names, fontsize=8, color="white")
+            ax.set_xlabel("ReliefF Score", color="white", fontsize=9)
+            ax.set_title("Feature Importance (RReliefF)",
+                         color="white", fontsize=10, pad=8)
+            ax.tick_params(colors="white", labelsize=8)
+            ax.axvline(0, color="#666688", linewidth=0.8, linestyle="--")
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#444466")
+            ax.invert_yaxis()
+
+            # Annotate bars with score values
+            for i, (score, bar_color) in enumerate(zip(scores, colors)):
+                ha  = "left" if score >= 0 else "right"
+                off = max(abs(scores)) * 0.02
+                ax.text(score + (off if score >= 0 else -off),
+                        i, f"{score:+.4f}",
+                        va="center", ha=ha,
+                        color=bar_color, fontsize=7)
+
+            fig.tight_layout()
+            self._render_figure(fig)
+
+        except Exception as e:
+            self._set_status(f"Plot error: {e}", hex_to_rgb("#CC4444"))
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  EXECUTE
+    # ══════════════════════════════════════════════════════════════════════
+    def execute(self, X=None, y=None):
+        self._last_X = X
+        self._last_y = y
+
+        if self._X_selected is None:
+            self._set_status("Hit Run ReliefF to compute scores.",
+                             hex_to_rgb("#888888"))
+            return {"X_selected": X, "feature_names": None}
+
+        return {
+            "X_selected":    self._X_selected,
+            "feature_names": self._selected_names,
+        }
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THEME HELPER
+    # ══════════════════════════════════════════════════════════════════════
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,
+                                    color,   category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                    darker,  category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                    darkest, category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
+
+class SHAPNode(MatplotlibNodeBase):
+    LABEL       = "SHAP"
+    TITLE_COLOR = (180, 100, 30, 255)
+    WIDTH       = 320
+
+    def __init__(self):
+        super().__init__()
+        self._status_id       = None
+        self._progress_id     = None
+        self._plot_type_id    = None
+        self._n_samples_id    = None
+        self._last_model      = None
+        self._last_X          = None
+        self._last_feat_names = None
+        self._shap_values     = None
+        self._is_running      = False
+        self._device          = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  BUILD
+    # ══════════════════════════════════════════════════════════════════════
+    def build(self, parent, pos=(10, 10)):
+        self._register_texture()
+
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # ── Input pins ────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("model")
+            self.input_attrs["model"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("X")
+            self.input_attrs["X"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("feature_names (optional)")
+            self.input_attrs["feature_names (optional)"] = a
+
+            # ── Body ──────────────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+
+                dpg.add_text("Plot Type:", color=hex_to_rgb("#333333"))
+                self._plot_type_id = dpg.add_combo(
+                    items=[
+                        "Bar (mean |SHAP|)",
+                        "Beeswarm",
+                        "Waterfall (first sample)",
+                        "Heatmap",
+                    ],
+                    default_value="Bar (mean |SHAP|)",
+                    width=self.WIDTH,
+                )
+                dpg.add_spacer(height=6)
+
+                with dpg.group(horizontal=True):
+                    dpg.add_text("Background samples:", color=hex_to_rgb("#555555"))
+                    self._n_samples_id = dpg.add_input_int(
+                        default_value=100,
+                        min_value=10,
+                        max_value=1000,
+                        width=80,
+                    )
+                dpg.add_text("(fewer = faster, more = accurate)",
+                             color=hex_to_rgb("#888888"))
+                dpg.add_spacer(height=6)
+
+                # Run button
+                run_btn = dpg.add_button(
+                    label="Compute SHAP Values",
+                    width=self.WIDTH,
+                    height=34,
+                    callback=self._on_run_click,
+                )
+                self._apply_btn_theme(run_btn, hex_to_rgb("#7A5A20"))
+                dpg.add_spacer(height=6)
+
+                # Status + progress
+                self._status_id = dpg.add_text(
+                    "Connect model and X then hit Compute",
+                    color=hex_to_rgb("#888888"),
+                )
+                self._progress_id = dpg.add_progress_bar(
+                    default_value=0.0,
+                    width=self.WIDTH,
+                )
+                dpg.add_spacer(height=6)
+
+                # Replot button
+                replot_btn = dpg.add_button(
+                    label="Replot",
+                    width=self.WIDTH,
+                    height=30,
+                    callback=self._plot,
+                )
+                self._apply_btn_theme(replot_btn, hex_to_rgb("#4A4A8A"))
+                dpg.add_spacer(height=4)
+
+                # Image canvas
+                self._image_id = dpg.add_image(self._texture_id)
+                dpg.add_spacer(height=4)
+
+                # Save PNG
+                save_btn = dpg.add_button(
+                    label="Save PNG",
+                    width=self.WIDTH,
+                    height=30,
+                    callback=self._save_png,
+                )
+                self._apply_btn_theme(save_btn, hex_to_rgb("#2A5A2A"))
+
+            # ── Output pins ───────────────────────────────────────────────
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
+                dpg.add_text("shap_values")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as b:
+                dpg.add_text("feature_importance")  # mean |SHAP| per feature
+
+            self.output_attrs = {
+                "shap_values":       a,
+                "feature_importance": b,
+            }
+            self.output_attr = None
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  STATUS HELPER
+    # ══════════════════════════════════════════════════════════════════════
+    def _set_status(self, text, color=None):
+        color = color or hex_to_rgb("#555555")
+        dpg.set_value(self._status_id, text)
+        dpg.configure_item(self._status_id, color=color)
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  RUN
+    # ══════════════════════════════════════════════════════════════════════
+    def _on_run_click(self):
+        if self._last_model is None:
+            self._set_status("No model connected.", hex_to_rgb("#CC4444"))
+            return
+        if self._last_X is None:
+            self._set_status("No X connected.", hex_to_rgb("#CC4444"))
+            return
+        if self._is_running:
+            self._set_status("Already computing...", hex_to_rgb("#CC8800"))
+            return
+        threading.Thread(target=self._compute, daemon=True).start()
+
+    def _compute(self):
+        self._is_running = True
+        dpg.set_value(self._progress_id, 0.0)
+        self._set_status("Preparing...", hex_to_rgb("#2266AA"))
+
+        try:
+            import shap
+            import pandas as pd
+
+            X_raw = self._last_X
+            model = self._last_model
+
+            # Get feature names
+            if self._last_feat_names is not None:
+                feature_names = list(self._last_feat_names)
+            elif isinstance(X_raw, pd.DataFrame):
+                feature_names = list(X_raw.columns)
+            else:
+                n_cols        = np.array(X_raw).shape[1]
+                feature_names = [f"feature_{i}" for i in range(n_cols)]
+
+            X_arr = np.array(X_raw).astype(np.float32)
+
+            # Subsample background for speed
+            n_bg  = min(dpg.get_value(self._n_samples_id), len(X_arr))
+            idx   = np.random.choice(len(X_arr), n_bg, replace=False)
+            X_bg  = X_arr[idx]
+
+            self._set_status(
+                f"Building explainer ({n_bg} background samples)...",
+                hex_to_rgb("#2266AA"),
+            )
+            dpg.set_value(self._progress_id, 0.1)
+
+            # ── Build SHAP explainer ──────────────────────────────────────
+            # Wrap PyTorch model in a predict function for KernelExplainer
+            def predict_fn(X_np):
+                model.eval()
+                with torch.no_grad():
+                    t   = torch.tensor(
+                        X_np.astype(np.float32)).to(self._device)
+                    out = model(t).cpu().numpy()
+                out = out.squeeze()
+                # If single output neuron collapses to 0-d, restore to 1-d
+                if out.ndim == 0:
+                    out = out.reshape(1)
+                elif out.ndim == 1 and len(X_np) > 1:
+                    pass  # already correct shape (n_samples,)
+                return out
+
+            self._set_status("Computing SHAP values (this may take a while)...",
+                             hex_to_rgb("#2266AA"))
+            dpg.set_value(self._progress_id, 0.2)
+
+            # Use KernelExplainer — works for ANY model type
+            explainer   = shap.KernelExplainer(predict_fn, X_bg)
+
+            dpg.set_value(self._progress_id, 0.4)
+
+            # Compute on a subsample for speed
+            n_explain   = min(200, len(X_arr))
+            X_explain   = X_arr[:n_explain]
+            shap_values = explainer.shap_values(X_explain, silent=True)
+
+            dpg.set_value(self._progress_id, 0.9)
+
+            # Handle multi-output (list of arrays)
+            if isinstance(shap_values, list):
+                shap_values = shap_values[0]
+
+            self._shap_values     = shap_values
+            self._last_feat_names = feature_names
+            self._X_explain       = X_explain
+
+            # Feature importance = mean |SHAP|
+            importance = np.abs(shap_values).mean(axis=0)
+            self._feature_importance = dict(
+                zip(feature_names, importance.tolist()))
+
+            dpg.set_value(self._progress_id, 1.0)
+            self._set_status(
+                f"Done — {n_explain} samples explained",
+                hex_to_rgb("#2A7A2A"),
+            )
+
+            # Auto plot
+            self._plot()
+
+        except ImportError:
+            self._set_status(
+                "SHAP not installed — run: pip install shap",
+                hex_to_rgb("#CC4444"),
+            )
+        except Exception as e:
+            self._set_status(f"Error: {e}", hex_to_rgb("#CC4444"))
+            dpg.set_value(self._progress_id, 0.0)
+        finally:
+            self._is_running = False
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  PLOT
+    # ══════════════════════════════════════════════════════════════════════
+    def _plot(self):
+        if self._shap_values is None:
+            self._set_status("Compute SHAP values first.",
+                             hex_to_rgb("#CC4444"))
+            return
+        try:
+            plot_type     = dpg.get_value(self._plot_type_id)
+            feature_names = self._last_feat_names
+            shap_vals     = self._shap_values
+            X_explain     = self._X_explain
+            n_features    = len(feature_names)
+
+            if plot_type == "Bar (mean |SHAP|)":
+                self._plot_bar(shap_vals, feature_names)
+
+            elif plot_type == "Beeswarm":
+                self._plot_beeswarm(shap_vals, X_explain, feature_names)
+
+            elif plot_type == "Waterfall (first sample)":
+                self._plot_waterfall(shap_vals, feature_names)
+
+            elif plot_type == "Heatmap":
+                self._plot_heatmap(shap_vals, feature_names)
+
+        except Exception as e:
+            self._set_status(f"Plot error: {e}", hex_to_rgb("#CC4444"))
+
+    def _plot_bar(self, shap_vals, feature_names):
+        importance    = np.abs(shap_vals).mean(axis=0)
+        ranked_idx    = np.argsort(importance)
+        ranked_names  = [feature_names[i] for i in ranked_idx]
+        ranked_scores = importance[ranked_idx]
+
+        fig_h  = max(3.5, len(feature_names) * 0.28)
+        fig, ax = plt.subplots(figsize=(4.2, fig_h), facecolor="#1a1a2e")
+        ax.set_facecolor("#16213e")
+        bars = ax.barh(range(len(ranked_names)), ranked_scores,
+                       color="#00C8C8", edgecolor="none", height=0.7)
+        ax.set_yticks(range(len(ranked_names)))
+        ax.set_yticklabels(ranked_names, fontsize=8, color="white")
+        ax.set_xlabel("mean(|SHAP value|)", color="white", fontsize=9)
+        ax.set_title("SHAP Feature Importance",
+                     color="white", fontsize=10, pad=8)
+        ax.tick_params(colors="white", labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#444466")
+
+        # Annotate
+        for i, score in enumerate(ranked_scores):
+            ax.text(score + max(ranked_scores) * 0.02, i,
+                    f"{score:.4f}", va="center",
+                    color="#00C8C8", fontsize=7)
+
+        fig.tight_layout()
+        self._render_figure(fig)
+
+    def _plot_beeswarm(self, shap_vals, X_explain, feature_names):
+        importance   = np.abs(shap_vals).mean(axis=0)
+        ranked_idx   = np.argsort(importance)[::-1]
+        n_show       = min(15, len(feature_names))
+        top_idx      = ranked_idx[:n_show]
+
+        fig, ax = plt.subplots(figsize=(4.2, 3.8), facecolor="#1a1a2e")
+        ax.set_facecolor("#16213e")
+
+        for plot_i, feat_i in enumerate(top_idx[::-1]):
+            sv     = shap_vals[:, feat_i]
+            fv     = X_explain[:, feat_i]
+
+            # Normalize feature values for color
+            fv_min, fv_max = fv.min(), fv.max()
+            fv_norm = (fv - fv_min) / (fv_max - fv_min + 1e-10)
+
+            # Jitter y positions
+            jitter = np.random.uniform(-0.3, 0.3, len(sv))
+            colors = plt.cm.RdBu(fv_norm)
+
+            ax.scatter(sv, np.full_like(sv, plot_i) + jitter,
+                       c=colors, alpha=0.5, s=8, linewidths=0)
+
+        ax.set_yticks(range(n_show))
+        ax.set_yticklabels(
+            [feature_names[i] for i in top_idx[::-1]],
+            fontsize=8, color="white",
+        )
+        ax.axvline(0, color="#666688", linewidth=0.8, linestyle="--")
+        ax.set_xlabel("SHAP value", color="white", fontsize=9)
+        ax.set_title("SHAP Beeswarm (top features)",
+                     color="white", fontsize=10, pad=8)
+        ax.tick_params(colors="white", labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#444466")
+        fig.tight_layout()
+        self._render_figure(fig)
+
+    def _plot_waterfall(self, shap_vals, feature_names):
+        """Waterfall for the first sample."""
+        sv         = shap_vals[0]
+        ranked_idx = np.argsort(np.abs(sv))[::-1]
+        n_show     = min(12, len(feature_names))
+        top_idx    = ranked_idx[:n_show][::-1]
+
+        names  = [feature_names[i] for i in top_idx]
+        values = sv[top_idx]
+        colors = ["#00C8C8" if v >= 0 else "#FF6B6B" for v in values]
+
+        # Compute running total for waterfall
+        cumsum = np.cumsum(values)
+        starts = np.roll(cumsum, 1)
+        starts[0] = 0
+
+        fig, ax = plt.subplots(figsize=(4.2, 3.8), facecolor="#1a1a2e")
+        ax.set_facecolor("#16213e")
+        ax.barh(range(n_show), values, left=starts,
+                color=colors, edgecolor="none", height=0.7)
+        ax.set_yticks(range(n_show))
+        ax.set_yticklabels(names, fontsize=8, color="white")
+        ax.axvline(0, color="#666688", linewidth=0.8, linestyle="--")
+        ax.set_xlabel("SHAP value", color="white", fontsize=9)
+        ax.set_title("SHAP Waterfall (sample 0)",
+                     color="white", fontsize=10, pad=8)
+        ax.tick_params(colors="white", labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#444466")
+        fig.tight_layout()
+        self._render_figure(fig)
+
+    def _plot_heatmap(self, shap_vals, feature_names):
+        importance = np.abs(shap_vals).mean(axis=0)
+        ranked_idx = np.argsort(importance)[::-1]
+        n_show     = min(12, len(feature_names))
+        top_idx    = ranked_idx[:n_show]
+
+        # Subsample rows for readability
+        n_rows  = min(50, shap_vals.shape[0])
+        row_idx = np.linspace(0, shap_vals.shape[0] - 1,
+                              n_rows, dtype=int)
+        data    = shap_vals[row_idx][:, top_idx].T
+        names   = [feature_names[i] for i in top_idx]
+
+        fig, ax = plt.subplots(figsize=(4.2, 3.8), facecolor="#1a1a2e")
+        ax.set_facecolor("#16213e")
+        vmax = np.abs(data).max()
+        im   = ax.imshow(data, aspect="auto", cmap="RdBu_r",
+                         vmin=-vmax, vmax=vmax)
+        ax.set_yticks(range(n_show))
+        ax.set_yticklabels(names, fontsize=8, color="white")
+        ax.set_xlabel("Samples", color="white", fontsize=9)
+        ax.set_title("SHAP Heatmap (top features)",
+                     color="white", fontsize=10, pad=8)
+        ax.tick_params(colors="white", labelsize=8)
+        cbar = fig.colorbar(im, ax=ax)
+        cbar.ax.tick_params(colors="white", labelsize=7)
+        cbar.set_label("SHAP value", color="white", fontsize=8)
+        fig.tight_layout()
+        self._render_figure(fig)
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  EXECUTE
+    # ══════════════════════════════════════════════════════════════════════
+    def execute(self, model=None, X=None, **kwargs):
+        feat_names = kwargs.get("feature_names (optional)")
+
+        if model is not None:
+            self._last_model = model
+        if X is not None:
+            self._last_X = X
+        if feat_names is not None:
+            self._last_feat_names = feat_names
+
+        if self._shap_values is None:
+            self._set_status(
+                "Hit Compute SHAP Values after running graph.",
+                hex_to_rgb("#888888"),
+            )
+            return {"shap_values": None, "feature_importance": None}
+
+        return {
+            "shap_values":        self._shap_values,
+            "feature_importance": self._feature_importance,
+        }
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THEME HELPER
+    # ══════════════════════════════════════════════════════════════════════
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,
+                                    color,   category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                    darker,  category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                    darkest, category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
+
 #NodeEditor App 
 class NodeEditorApp:
     """Owns the DPG viewport and window. Delegates logic to NodeGraph."""
@@ -2631,6 +3651,9 @@ class NodeEditorApp:
         ("Temporal Split", TemporalSplitNode),
         ("Inference", InferenceNode),
         ("Make CSV", MakeCSVNode),
+        ("ReliefF", ReliefFNode),
+        ("Loss Curve",   LossCurveNode),
+        ("SHAP", SHAPNode),
     ]
 
     EDITOR_TAG = "node_editor"
