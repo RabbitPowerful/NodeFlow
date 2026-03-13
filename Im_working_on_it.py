@@ -509,175 +509,309 @@ class MakeCSVNode(BaseNode):
 class ColumnSelectorNode(BaseNode):
     LABEL       = "Column Selector"
     TITLE_COLOR = (20, 100, 110, 255)
-
-    WIDTH = 260
+    WIDTH       = 320
 
     def __init__(self):
         super().__init__()
-        self._graph         = None
-        self._all_columns:  list[str] = []
-        self._x_columns:    list[str] = []
-        self._all_list_id:  int | None = None
-        self._x_list_id:    int | None = None
-        self._y_combo_id:   int | None = None
-        self._status_id:    int | None = None
+        self._columns      = None
+        self._x_features   = []
+        self._graph        = None
+
+        # Widget IDs
+        self._avail_list_id = None
+        self._x_list_id     = None
+        self._y_combo_id    = None
+        self._status_id     = None
 
     def set_graph(self, graph):
         self._graph = graph
 
+    # ══════════════════════════════════════════════════════════════════════
+    #  BUILD
+    # ══════════════════════════════════════════════════════════════════════
     def build(self, parent, pos=(10, 10)):
         with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
 
             # ── Input pin ─────────────────────────────────────────────────
-            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as attr_id:
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
                 dpg.add_text("data")
-            self.input_attrs["data"] = attr_id
+            self.input_attrs["data"] = a
 
-            # ── Static body ───────────────────────────────────────────────
+            # ── Body ──────────────────────────────────────────────────────
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+
                 self._status_id = dpg.add_text(
-                    "Connect a CSV node then hit Refresh",
-                    color=(160, 160, 160, 255),
+                    "No data connected",
+                    color=hex_to_rgb("#888888"),
                 )
-                dpg.add_button(
-                    label="↺ Refresh Columns",
+                dpg.add_spacer(height=6)
+
+                # Refresh button
+                refresh_btn = dpg.add_button(
+                    label="⟳ Refresh Columns",
                     width=self.WIDTH,
                     callback=self._refresh_from_upstream,
                 )
-                dpg.add_spacer(height=4)
+                self._apply_btn_theme(refresh_btn, hex_to_rgb("#555555"))
+                dpg.add_spacer(height=8)
 
-                # Available columns
-                dpg.add_text("Available columns:", color=(180, 180, 180, 255))
-                self._all_list_id = dpg.add_listbox(
+                # ── Available columns ─────────────────────────────────────
+                dpg.add_text("Available columns:",
+                             color=hex_to_rgb("#333333"))
+                self._avail_list_id = dpg.add_listbox(
                     items=[],
                     width=self.WIDTH,
-                    num_items=5,
+                    num_items=6,
                 )
-                with dpg.group(horizontal=True):
-                    dpg.add_button(
-                        label="→ Add to X",
-                        width=self.WIDTH // 2 - 2,
-                        callback=self._add_to_x,
-                    )
-                    dpg.add_button(
-                        label="✕ Remove X",
-                        width=self.WIDTH // 2 - 2,
-                        callback=self._remove_from_x,
-                    )
+                dpg.add_spacer(height=6)
 
-                # Selected X features
-                dpg.add_text("X features:", color=(100, 200, 255, 255))
+                # ── Add / Remove / Select All / Clear ─────────────────────
+                with dpg.group(horizontal=True):
+                    add_btn = dpg.add_button(
+                        label="+ Add X",
+                        width=self.WIDTH // 4 - 2,
+                        callback=self._add_feature,
+                    )
+                    rem_btn = dpg.add_button(
+                        label="- Remove",
+                        width=self.WIDTH // 4 - 2,
+                        callback=self._remove_feature,
+                    )
+                    all_btn = dpg.add_button(
+                        label="All",
+                        width=self.WIDTH // 4 - 2,
+                        callback=self._select_all,
+                    )
+                    clr_btn = dpg.add_button(
+                        label="Clear",
+                        width=self.WIDTH // 4 - 2,
+                        callback=self._clear_all,
+                    )
+                    self._apply_btn_theme(add_btn, hex_to_rgb("#4A7C59"))
+                    self._apply_btn_theme(rem_btn, hex_to_rgb("#8B4444"))
+                    self._apply_btn_theme(all_btn, hex_to_rgb("#2D6A9F"))
+                    self._apply_btn_theme(clr_btn, hex_to_rgb("#7A5A20"))
+
+                dpg.add_spacer(height=8)
+
+                # ── X features list ───────────────────────────────────────
+                dpg.add_text("X features:", color=hex_to_rgb("#333333"))
                 self._x_list_id = dpg.add_listbox(
                     items=[],
                     width=self.WIDTH,
-                    num_items=4,
+                    num_items=6,
                 )
+                dpg.add_spacer(height=8)
 
-                # y target
-                dpg.add_text("y target:", color=(255, 180, 80, 255))
+                # ── y target ──────────────────────────────────────────────
+                dpg.add_text("y target:", color=hex_to_rgb("#333333"))
                 self._y_combo_id = dpg.add_combo(
                     items=[],
                     width=self.WIDTH,
                 )
 
             # ── Output pins ───────────────────────────────────────────────
-            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as x_attr:
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
                 dpg.add_text("X")
-            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as y_attr:
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as b:
                 dpg.add_text("y")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as c:
+                dpg.add_text("feature_names")
 
-            self.output_attrs = {"X": x_attr, "y": y_attr}
+            self.output_attrs = {"X": a, "y": b, "feature_names": c}
             self.output_attr  = None
 
         NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
         return self.node_id
 
-    # ── Refresh from upstream ─────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════
+    #  COLUMN MANAGEMENT
+    # ══════════════════════════════════════════════════════════════════════
     def _refresh_from_upstream(self):
-        """Pull the DataFrame from the connected upstream node directly,
-        without needing to run the full graph."""
+        """Pull column names from the upstream CSV node."""
         if self._graph is None:
             dpg.set_value(self._status_id, "No graph reference.")
             return
 
-        # Find which output attr is linked to our data input pin
-        in_attr = self.input_attrs.get("data")
-        source_out = None
-        for _, (out_a, in_a) in self._graph._links.items():
+        in_attr  = self.input_attrs.get("data")
+        src_attr = None
+
+        for lid, (out_a, in_a) in self._graph._links.items():
             if in_a == in_attr:
-                source_out = out_a
+                src_attr = out_a
                 break
 
-        if source_out is None:
-            dpg.set_value(self._status_id, "No upstream node connected.")
+        if src_attr is None:
+            dpg.set_value(self._status_id, "Connect a CSV node first.")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
             return
 
-        # Find the upstream node and call execute() on it directly
-        source_nid = self._graph._attr_to_node.get(source_out)
-        source_node = self._graph._nodes.get(source_nid)
+        src_node_id = self._graph._attr_to_node.get(src_attr)
+        if src_node_id is None:
+            return
 
-        if source_node is None:
-            dpg.set_value(self._status_id, "Upstream node not found.")
+        src_node = self._graph._nodes.get(src_node_id)
+        if src_node is None:
             return
 
         try:
-            df = source_node.execute()
+            result = src_node.execute()
+            if result is None:
+                dpg.set_value(self._status_id, "Upstream returned no data.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return
+
+            import pandas as pd
+            df = result if isinstance(result, pd.DataFrame) else None
+            if df is None and isinstance(result, dict):
+                df = next((v for v in result.values()
+                           if isinstance(v, pd.DataFrame)), None)
+
+            if df is None:
+                dpg.set_value(self._status_id, "No DataFrame found upstream.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return
+
+            self._columns = list(df.columns)
+            self._populate_widgets()
+
         except Exception as e:
-            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.set_value(self._status_id, f"Refresh error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+
+    def _populate_widgets(self):
+        if not self._columns:
             return
+        dpg.configure_item(self._avail_list_id, items=self._columns)
+        dpg.configure_item(self._y_combo_id,    items=self._columns)
+        # Default y = last column
+        dpg.set_value(self._y_combo_id, self._columns[-1])
+        dpg.set_value(self._status_id,
+                      f"{len(self._columns)} columns loaded")
+        dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
 
-        if df is None:
-            dpg.set_value(self._status_id, "Upstream returned None — load a CSV first.")
-            return
+    # ── Feature buttons ───────────────────────────────────────────────────
+    def _add_feature(self):
+        selected = dpg.get_value(self._avail_list_id)
+        if selected and selected not in self._x_features:
+            self._x_features.append(selected)
+            dpg.configure_item(self._x_list_id, items=self._x_features)
 
-        self._load_columns(list(df.columns))
-
-    def _load_columns(self, columns: list[str]):
-        """Populate widgets with column names, preserving existing selections."""
-        prev_x = list(self._x_columns)
-        prev_y = dpg.get_value(self._y_combo_id)
-
-        self._all_columns = columns
-
-        # Restore valid previous selections, drop any that no longer exist
-        self._x_columns = [c for c in prev_x if c in columns]
-
-        dpg.configure_item(self._all_list_id, items=self._all_columns)
-        dpg.configure_item(self._x_list_id,   items=self._x_columns)
-        dpg.configure_item(self._y_combo_id,  items=self._all_columns)
-
-        if prev_y in columns:
-            dpg.set_value(self._y_combo_id, prev_y)
-
-        dpg.set_value(self._status_id, f"{len(columns)} columns loaded")
-
-    # ── Column management ─────────────────────────────────────────────────
-    def _add_to_x(self):
-        selected = dpg.get_value(self._all_list_id)
-        if selected and selected not in self._x_columns:
-            self._x_columns.append(selected)
-            dpg.configure_item(self._x_list_id, items=list(self._x_columns))
-
-    def _remove_from_x(self):
+    def _remove_feature(self):
         selected = dpg.get_value(self._x_list_id)
-        if selected in self._x_columns:
-            self._x_columns.remove(selected)
-            dpg.configure_item(self._x_list_id, items=list(self._x_columns))
+        if selected in self._x_features:
+            self._x_features.remove(selected)
+            dpg.configure_item(self._x_list_id, items=self._x_features)
 
-    # ── Execution ─────────────────────────────────────────────────────────
+    def _select_all(self):
+        if not self._columns:
+            dpg.set_value(self._status_id,
+                          "Refresh columns first.")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#CC4444"))
+            return
+        y_target         = dpg.get_value(self._y_combo_id)
+        self._x_features = [c for c in self._columns if c != y_target]
+        dpg.configure_item(self._x_list_id, items=self._x_features)
+        dpg.set_value(self._status_id,
+                      f"Selected {len(self._x_features)} features")
+        dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+
+    def _clear_all(self):
+        self._x_features = []
+        dpg.configure_item(self._x_list_id, items=[])
+        dpg.set_value(self._status_id, "Cleared all X features")
+        dpg.configure_item(self._status_id, color=hex_to_rgb("#888888"))
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  EXECUTE
+    # ══════════════════════════════════════════════════════════════════════
     def execute(self, data=None):
         if data is None:
-            return {"X": None, "y": None}
+            dpg.set_value(self._status_id, "No data received.")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#888888"))
+            return {"X": None, "y": None, "feature_names": None}
 
-        # Refresh columns if data changed
-        if list(data.columns) != self._all_columns:
-            self._load_columns(list(data.columns))
+        try:
+            import pandas as pd
 
-        y_col = dpg.get_value(self._y_combo_id)
-        X = data[self._x_columns] if self._x_columns else None
-        y = data[y_col]           if y_col in data.columns else None
+            if not isinstance(data, pd.DataFrame):
+                dpg.set_value(self._status_id,
+                              "Input must be a DataFrame.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return {"X": None, "y": None, "feature_names": None}
 
-        return {"X": X, "y": y}
+            # Auto-populate columns on first run if not refreshed yet
+            if self._columns is None:
+                self._columns = list(data.columns)
+                self._populate_widgets()
+
+            if not self._x_features:
+                dpg.set_value(self._status_id,
+                              "No X features selected.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return {"X": None, "y": None, "feature_names": None}
+
+            y_col = dpg.get_value(self._y_combo_id)
+            if not y_col:
+                dpg.set_value(self._status_id, "No y target selected.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return {"X": None, "y": None, "feature_names": None}
+
+            # Filter only columns that exist in the DataFrame
+            valid_x = [c for c in self._x_features if c in data.columns]
+            if len(valid_x) != len(self._x_features):
+                missing = set(self._x_features) - set(valid_x)
+                dpg.set_value(self._status_id,
+                              f"Missing columns: {missing}")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC8800"))
+
+            X = data[valid_x]
+            y = data[y_col]
+
+            dpg.set_value(self._status_id,
+                f"X: {X.shape}  y: {y.shape}")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#2A7A2A"))
+
+            return {
+                "X":             X,
+                "y":             y,
+                "feature_names": valid_x,
+            }
+
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return {"X": None, "y": None, "feature_names": None}
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THEME HELPER
+    # ══════════════════════════════════════════════════════════════════════
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,
+                                    color,   category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                    darker,  category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                    darkest, category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
 
 class TrainTestSplitNode(BaseNode):
     LABEL       = "Train Test Split"
@@ -2063,7 +2197,6 @@ class NodeGraph:
 
         print("─────────────────────\n")
 
-
 #Custom Visualization Nodes:
 class MatplotlibNodeBase(BaseNode):
     """Base class for any node that renders a matplotlib figure
@@ -2781,6 +2914,608 @@ class LossCurveNode(MatplotlibNodeBase):
                                     category=dpg.mvThemeCat_Core)
                 dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,   darkest,
                                     category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
+
+#Feature Engineering
+class FeatureEngineeringNode(BaseNode):
+    LABEL       = "Feature Engineering"
+    TITLE_COLOR = (180, 100, 30, 255)
+    WIDTH       = 320
+
+    RESOLUTIONS = {
+        "15 min": 15,
+        "30 min": 30,
+        "Hourly": 60,
+        "Daily":  1440,
+        "Weekly": 10080,
+        "Custom": None,
+    }
+
+    def __init__(self):
+        super().__init__()
+        self._tab_btns   = {}
+        self._tab_groups = {}
+        self._active_tab = "Datetime"
+
+        # Datetime
+        self._dt_col_id          = None
+        self._use_hour_id        = None
+        self._use_minute_id      = None
+        self._use_dayofweek_id   = None
+        self._use_dayofyear_id   = None
+        self._use_month_id       = None
+        self._use_weekofyear_id  = None
+        self._use_is_weekend_id  = None
+        self._use_season_id      = None
+        self._drop_dt_id         = None
+
+        # Cyclic
+        self._cyc_hour_id   = None
+        self._cyc_minute_id = None
+        self._cyc_dow_id    = None
+        self._cyc_doy_id    = None
+        self._cyc_month_id  = None
+
+        # Lag
+        self._resolution_id      = None
+        self._custom_res_id      = None
+        self._custom_grp_id      = None
+        self._resolution_info_id = None
+        self._avail_cols_id      = None
+        self._sel_cols_id        = None
+        self._selected_lag_cols  = []
+        self._lag_day_id         = None
+        self._lag_week_id        = None
+        self._lag_custom_id      = None
+        self._roll_day_id        = None
+        self._roll_week_id       = None
+        self._use_diff_id        = None
+        self._use_ewm_id         = None
+        self._ewm_span_id        = None
+
+        self._status_id = None
+        self._columns   = []
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  BUILD
+    # ══════════════════════════════════════════════════════════════════════
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("data")
+            self.input_attrs["data"] = a
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+
+                with dpg.group(horizontal=True):
+                    for tab in ["Datetime", "Cyclic", "Lag"]:
+                        btn = dpg.add_button(
+                            label=tab,
+                            width=self.WIDTH // 3,
+                            callback=self._on_tab_click,
+                            user_data=tab,
+                        )
+                        self._tab_btns[tab] = btn
+
+                dpg.add_spacer(height=8)
+
+                with dpg.group(show=True) as g:
+                    self._build_datetime_tab()
+                self._tab_groups["Datetime"] = g
+
+                with dpg.group(show=False) as g:
+                    self._build_cyclic_tab()
+                self._tab_groups["Cyclic"] = g
+
+                with dpg.group(show=False) as g:
+                    self._build_lag_tab()
+                self._tab_groups["Lag"] = g
+
+                dpg.add_spacer(height=8)
+                self._status_id = dpg.add_text(
+                    "Connect data and run graph",
+                    color=hex_to_rgb("#888888"),
+                )
+
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
+                dpg.add_text("data")
+
+            self.output_attrs = {"data": a}
+            self.output_attr  = None
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        self._refresh_tab_styles()
+        return self.node_id
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  TAB CONTENT
+    # ══════════════════════════════════════════════════════════════════════
+    def _build_datetime_tab(self):
+        dpg.add_text(
+            "Skip if data already has hour/month/\ndayofweek columns.",
+            color=hex_to_rgb("#888888"),
+        )
+        dpg.add_spacer(height=6)
+        dpg.add_text("DateTime column name:", color=hex_to_rgb("#333333"))
+        self._dt_col_id = dpg.add_input_text(
+            default_value="DateTime",
+            width=self.WIDTH,
+            hint="leave blank to skip",
+        )
+        dpg.add_spacer(height=6)
+        dpg.add_text("Extract features:", color=hex_to_rgb("#333333"))
+        dpg.add_spacer(height=4)
+
+        with dpg.group(horizontal=True):
+            self._use_hour_id = dpg.add_checkbox(
+                label="Hour", default_value=True)
+            dpg.add_spacer(width=10)
+            self._use_minute_id = dpg.add_checkbox(
+                label="Minute", default_value=True)
+            dpg.add_spacer(width=10)
+            self._use_month_id = dpg.add_checkbox(
+                label="Month", default_value=True)
+
+        with dpg.group(horizontal=True):
+            self._use_dayofweek_id = dpg.add_checkbox(
+                label="Day of Week", default_value=True)
+            dpg.add_spacer(width=10)
+            self._use_is_weekend_id = dpg.add_checkbox(
+                label="Is Weekend", default_value=True)
+
+        with dpg.group(horizontal=True):
+            self._use_dayofyear_id = dpg.add_checkbox(
+                label="Day of Year", default_value=True)
+            dpg.add_spacer(width=10)
+            self._use_weekofyear_id = dpg.add_checkbox(
+                label="Week of Year", default_value=False)
+
+        self._use_season_id = dpg.add_checkbox(
+            label="Season (0=Spring 1=Summer 2=Autumn 3=Winter)",
+            default_value=True,
+        )
+        dpg.add_spacer(height=6)
+        self._drop_dt_id = dpg.add_checkbox(
+            label="Drop original DateTime column",
+            default_value=True,
+        )
+
+    def _build_cyclic_tab(self):
+        dpg.add_text("Encode as sin/cos pairs:", color=hex_to_rgb("#333333"))
+        dpg.add_text(
+            "Preserves circular nature — hour 23\n"
+            "and hour 0 will be treated as close.",
+            color=hex_to_rgb("#888888"),
+        )
+        dpg.add_spacer(height=8)
+
+        self._cyc_hour_id   = dpg.add_checkbox(
+            label="Hour          (period=24)",  default_value=True)
+        self._cyc_minute_id = dpg.add_checkbox(
+            label="Minute        (period=60)",  default_value=False)
+        self._cyc_dow_id    = dpg.add_checkbox(
+            label="Day of Week   (period=7)",   default_value=True)
+        self._cyc_doy_id    = dpg.add_checkbox(
+            label="Day of Year   (period=365)", default_value=True)
+        self._cyc_month_id  = dpg.add_checkbox(
+            label="Month         (period=12)",  default_value=True)
+
+        dpg.add_spacer(height=6)
+        dpg.add_text(
+            "These columns must already exist in\n"
+            "data (from Datetime tab or original CSV).",
+            color=hex_to_rgb("#888888"),
+        )
+
+    def _build_lag_tab(self):
+        # Resolution
+        dpg.add_text("Data Resolution:", color=hex_to_rgb("#333333"))
+        self._resolution_id = dpg.add_combo(
+            items=list(self.RESOLUTIONS.keys()),
+            default_value="15 min",
+            width=self.WIDTH,
+            callback=self._on_resolution_change,
+        )
+        dpg.add_spacer(height=4)
+
+        with dpg.group(show=False) as self._custom_grp_id:
+            with dpg.group(horizontal=True):
+                dpg.add_text("Minutes per step:", color=hex_to_rgb("#555555"))
+                self._custom_res_id = dpg.add_input_int(
+                    default_value=15, min_value=1, width=80)
+            dpg.add_spacer(height=4)
+
+        self._resolution_info_id = dpg.add_text(
+            "1 day = 96 steps  |  1 week = 672 steps",
+            color=hex_to_rgb("#2266AA"),
+        )
+        dpg.add_spacer(height=8)
+
+        # Column selector
+        dpg.add_text("Select columns for lag features:",
+                     color=hex_to_rgb("#333333"))
+        dpg.add_spacer(height=2)
+        dpg.add_text("Available:", color=hex_to_rgb("#555555"))
+        self._avail_cols_id = dpg.add_listbox(
+            items=[], width=self.WIDTH, num_items=4)
+        dpg.add_spacer(height=4)
+
+        with dpg.group(horizontal=True):
+            add_btn = dpg.add_button(
+                label="+ Add",
+                width=self.WIDTH // 2 - 2,
+                callback=self._add_lag_col,
+            )
+            rem_btn = dpg.add_button(
+                label="- Remove",
+                width=self.WIDTH // 2 - 2,
+                callback=self._remove_lag_col,
+            )
+            self._apply_btn_theme(add_btn, hex_to_rgb("#4A7C59"))
+            self._apply_btn_theme(rem_btn, hex_to_rgb("#8B4444"))
+
+        dpg.add_spacer(height=4)
+        dpg.add_text("Selected:", color=hex_to_rgb("#555555"))
+        self._sel_cols_id = dpg.add_listbox(
+            items=[], width=self.WIDTH, num_items=4)
+        dpg.add_spacer(height=8)
+
+        # Lag periods
+        dpg.add_text("Lag periods:", color=hex_to_rgb("#333333"))
+        dpg.add_spacer(height=4)
+
+        with dpg.group(horizontal=True):
+            self._lag_day_id  = dpg.add_checkbox(
+                label="1 day ago",  default_value=True)
+            dpg.add_spacer(width=10)
+            self._lag_week_id = dpg.add_checkbox(
+                label="1 week ago", default_value=True)
+
+        dpg.add_text("Recent lag steps (in steps, comma separated):",
+                     color=hex_to_rgb("#555555"))
+        dpg.add_text("1 step = 1 interval (e.g. 15min for 15min data)",
+                     color=hex_to_rgb("#888888"))
+        self._lag_custom_id = dpg.add_input_text(
+            default_value="1,2,3,4",
+            width=self.WIDTH,
+            hint="1=15min ago  4=1hr ago  48=12hr ago",
+        )
+        dpg.add_spacer(height=8)
+
+        # Rolling
+        dpg.add_text("Rolling windows:", color=hex_to_rgb("#333333"))
+        dpg.add_spacer(height=4)
+
+        with dpg.group(horizontal=True):
+            self._roll_day_id  = dpg.add_checkbox(
+                label="1 day mean+std",  default_value=True)
+            dpg.add_spacer(width=10)
+            self._roll_week_id = dpg.add_checkbox(
+                label="1 week mean+std", default_value=False)
+
+        dpg.add_spacer(height=8)
+
+        # Extra
+        dpg.add_text("Extra:", color=hex_to_rgb("#333333"))
+        self._use_diff_id = dpg.add_checkbox(
+            label="Diff  (rate of change, step=1)",
+            default_value=True,
+        )
+        with dpg.group(horizontal=True):
+            self._use_ewm_id  = dpg.add_checkbox(
+                label="EWM  span=", default_value=False)
+            self._ewm_span_id = dpg.add_input_int(
+                default_value=96, min_value=2, width=80)
+
+        dpg.add_spacer(height=8)
+        dpg.add_text("Output options:", color=hex_to_rgb("#333333"))
+        self._merge_id = dpg.add_combo(
+            items=["New dataset (engineered only)",
+                   "Merge with original dataset"],
+            default_value="New dataset (engineered only)",
+            width=self.WIDTH,
+        )
+        dpg.add_spacer(height=4)
+        save_btn = dpg.add_button(
+            label="Save as CSV…",
+            width=self.WIDTH,
+            height=30,
+            callback=self._save_csv,
+        )
+        self._apply_btn_theme(save_btn, hex_to_rgb("#2A5A2A"))
+
+        dpg.add_spacer(height=4)
+        dpg.add_text("NaN rows from lags will be dropped.",
+                     color=hex_to_rgb("#888888"))
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  RESOLUTION
+    # ══════════════════════════════════════════════════════════════════════
+    def _get_steps_per_day(self):
+        res = dpg.get_value(self._resolution_id)
+        mins = (dpg.get_value(self._custom_res_id)
+                if res == "Custom"
+                else self.RESOLUTIONS[res])
+        return int(1440 / mins)
+
+    def _on_resolution_change(self):
+        res = dpg.get_value(self._resolution_id)
+        dpg.configure_item(self._custom_grp_id, show=(res == "Custom"))
+        if res != "Custom":
+            mins  = self.RESOLUTIONS[res]
+            sd    = int(1440 / mins)
+            sw    = sd * 7
+            dpg.set_value(self._resolution_info_id,
+                          f"1 day = {sd} steps  |  1 week = {sw} steps")
+        else:
+            dpg.set_value(self._resolution_info_id,
+                          "Set minutes per step above")
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  LAG COLUMN SELECTION
+    # ══════════════════════════════════════════════════════════════════════
+    def _add_lag_col(self):
+        sel = dpg.get_value(self._avail_cols_id)
+        if sel and sel not in self._selected_lag_cols:
+            self._selected_lag_cols.append(sel)
+            dpg.configure_item(self._sel_cols_id,
+                               items=self._selected_lag_cols)
+
+    def _remove_lag_col(self):
+        sel = dpg.get_value(self._sel_cols_id)
+        if sel in self._selected_lag_cols:
+            self._selected_lag_cols.remove(sel)
+            dpg.configure_item(self._sel_cols_id,
+                               items=self._selected_lag_cols)
+
+    def _save_csv(self):
+        if not hasattr(self, "_last_output_df") or self._last_output_df is None:
+            dpg.set_value(self._status_id, "Run graph first.")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return
+        with dpg.file_dialog(
+            label="Save CSV",
+            width=500, height=350,
+            show=True,
+            callback=self._on_save_csv,
+            default_filename="engineered_features.csv",
+        ):
+            dpg.add_file_extension(".csv", color=(0, 255, 120, 255))
+
+    def _on_save_csv(self, sender, app_data):
+        path = app_data.get("file_path_name", "")
+        if not path:
+            return
+        if not path.endswith(".csv"):
+            path += ".csv"
+        try:
+            self._last_output_df.to_csv(path, index=False)
+            fname = path.split("\\")[-1].split("/")[-1]
+            dpg.set_value(self._status_id, f"Saved → {fname}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Save error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+
+    def _update_avail_cols(self, columns):
+        self._columns = columns
+        dpg.configure_item(self._avail_cols_id, items=columns)
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  TAB SWITCHING
+    # ══════════════════════════════════════════════════════════════════════
+    def _on_tab_click(self, sender, app_data, user_data):
+        self._active_tab = user_data
+        for name, group in self._tab_groups.items():
+            dpg.configure_item(group, show=(name == user_data))
+        self._refresh_tab_styles()
+
+    def _refresh_tab_styles(self):
+        for name, btn in self._tab_btns.items():
+            color = (hex_to_rgb("#2D6A9F") if name == self._active_tab
+                     else hex_to_rgb("#555555"))
+            self._apply_btn_theme(btn, color)
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  FEATURE GENERATION
+    # ══════════════════════════════════════════════════════════════════════
+    def _add_datetime_features(self, df):
+        import pandas as pd
+        dt_col = dpg.get_value(self._dt_col_id).strip()
+
+        if not dt_col or dt_col not in df.columns:
+            return df, "Datetime skipped"
+
+        dt    = pd.to_datetime(df[dt_col])
+        df    = df.copy()
+        added = []
+
+        if dpg.get_value(self._use_hour_id):
+            df["hour"]       = dt.dt.hour;       added.append("hour")
+        if dpg.get_value(self._use_minute_id):
+            df["minute"]     = dt.dt.minute;     added.append("minute")
+        if dpg.get_value(self._use_month_id):
+            df["month"]      = dt.dt.month;      added.append("month")
+        if dpg.get_value(self._use_dayofweek_id):
+            df["dayofweek"]  = dt.dt.dayofweek;  added.append("dayofweek")
+        if dpg.get_value(self._use_is_weekend_id):
+            df["is_weekend"] = (dt.dt.dayofweek >= 5).astype(int)
+            added.append("is_weekend")
+        if dpg.get_value(self._use_dayofyear_id):
+            df["dayofyear"]  = dt.dt.dayofyear;  added.append("dayofyear")
+        if dpg.get_value(self._use_weekofyear_id):
+            df["weekofyear"] = dt.dt.isocalendar().week.astype(int)
+            added.append("weekofyear")
+        if dpg.get_value(self._use_season_id):
+            def get_season(m):
+                if m in [3,4,5]:    return 0
+                if m in [6,7,8]:    return 1
+                if m in [9,10,11]:  return 2
+                return 3
+            df["season"] = dt.dt.month.map(get_season)
+            added.append("season")
+        if dpg.get_value(self._drop_dt_id):
+            df = df.drop(columns=[dt_col])
+
+        return df, f"+{len(added)} datetime"
+
+    def _add_cyclic_features(self, df):
+        added = []
+
+        def add_cyc(col, period):
+            if col not in df.columns:
+                return
+            df[f"{col}_sin"] = np.sin(2 * np.pi * df[col] / period)
+            df[f"{col}_cos"] = np.cos(2 * np.pi * df[col] / period)
+            added.append(col)
+
+        if dpg.get_value(self._cyc_hour_id):    add_cyc("hour",      24)
+        if dpg.get_value(self._cyc_minute_id):  add_cyc("minute",    60)
+        if dpg.get_value(self._cyc_dow_id):     add_cyc("dayofweek",  7)
+        if dpg.get_value(self._cyc_doy_id):     add_cyc("dayofyear", 365)
+        if dpg.get_value(self._cyc_month_id):   add_cyc("month",     12)
+
+        return df, f"+{len(added)*2} cyclic"
+
+    def _add_lag_features(self, df):
+        if not self._selected_lag_cols:
+            return df, "No lag columns selected"
+
+        steps_day  = self._get_steps_per_day()
+        steps_week = steps_day * 7
+        added      = []
+
+        try:
+            custom_str  = dpg.get_value(self._lag_custom_id).strip()
+            custom_lags = [int(x.strip())
+                           for x in custom_str.split(",") if x.strip()]
+        except ValueError:
+            custom_lags = []
+
+        for col in self._selected_lag_cols:
+            if col not in df.columns:
+                continue
+
+            for lag in custom_lags:
+                df[f"{col}_lag{lag}"] = df[col].shift(lag)
+                added.append(f"{col}_lag{lag}")
+
+            if dpg.get_value(self._lag_day_id):
+                df[f"{col}_lag_1day"] = df[col].shift(steps_day)
+                added.append(f"{col}_lag_1day ({steps_day}steps)")
+
+            if dpg.get_value(self._lag_week_id):
+                df[f"{col}_lag_1week"] = df[col].shift(steps_week)
+                added.append(f"{col}_lag_1week ({steps_week}steps)")
+
+            if dpg.get_value(self._roll_day_id):
+                df[f"{col}_rollmean_1day"] = (
+                    df[col].shift(1).rolling(steps_day).mean())
+                df[f"{col}_rollstd_1day"] = (
+                    df[col].shift(1).rolling(steps_day).std())
+                added.append(f"{col}_rollmean/std_1day")
+
+            if dpg.get_value(self._roll_week_id):
+                df[f"{col}_rollmean_1week"] = (
+                    df[col].shift(1).rolling(steps_week).mean())
+                df[f"{col}_rollstd_1week"] = (
+                    df[col].shift(1).rolling(steps_week).std())
+                added.append(f"{col}_rollmean/std_1week")
+
+            if dpg.get_value(self._use_diff_id):
+                df[f"{col}_diff1"] = df[col].diff(1)
+                added.append(f"{col}_diff1")
+
+            if dpg.get_value(self._use_ewm_id):
+                span = dpg.get_value(self._ewm_span_id)
+                df[f"{col}_ewm{span}"] = (
+                    df[col].shift(1).ewm(span=span).mean())
+                added.append(f"{col}_ewm{span}")
+
+        before  = len(df)
+        df      = df.dropna().reset_index(drop=True)
+        dropped = before - len(df)
+
+        return df, f"+{len(added)} lag  (-{dropped} NaN rows)"
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  EXECUTE
+    # ══════════════════════════════════════════════════════════════════════
+    def execute(self, data=None):
+        if data is None:
+            dpg.set_value(self._status_id, "No data connected.")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#888888"))
+            return {"data": None}
+
+        try:
+            import pandas as pd
+            if not isinstance(data, pd.DataFrame):
+                data = pd.DataFrame(data)
+
+            self._update_avail_cols(list(data.columns))
+
+            df          = data.copy()
+            original    = data.copy() 
+            cols_before = len(df.columns)
+            msgs        = []
+
+            df, msg = self._add_datetime_features(df); msgs.append(msg)
+            df, msg = self._add_cyclic_features(df);   msgs.append(msg)
+            df, msg = self._add_lag_features(df);      msgs.append(msg)
+
+            # ── Merge mode ────────────────────────────────────────────────
+            merge_mode = dpg.get_value(self._merge_id)
+            if merge_mode == "Merge with original dataset":
+                new_cols         = [c for c in df.columns
+                                    if c not in original.columns]
+                original_trimmed = original.iloc[
+                    len(original) - len(df):
+                ].reset_index(drop=True)
+                output_df = pd.concat(
+                    [original_trimmed,
+                     df[new_cols].reset_index(drop=True)],
+                    axis=1,
+                )
+            else:
+                output_df = df
+
+            self._last_output_df = output_df
+
+            dpg.set_value(
+                self._status_id,
+                f"{cols_before}→{len(output_df.columns)} cols | "
+                f"{len(output_df)} rows\n" + "  ".join(msgs),
+            )
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+
+            return {"data": output_df}
+        
+        except Exception as e:          # ← this line is likely missing
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return {"data": None}
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THEME HELPER
+    # ══════════════════════════════════════════════════════════════════════
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,
+                                    color,   category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                    darker,  category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                    darkest, category=dpg.mvThemeCat_Core)
                 dpg.add_theme_color(dpg.mvThemeCol_Text,
                                     hex_to_rgb("#FFFFFF"),
                                     category=dpg.mvThemeCat_Core)
@@ -3654,6 +4389,7 @@ class NodeEditorApp:
         ("ReliefF", ReliefFNode),
         ("Loss Curve",   LossCurveNode),
         ("SHAP", SHAPNode),
+        ("Feature Engineering", FeatureEngineeringNode),
     ]
 
     EDITOR_TAG = "node_editor"

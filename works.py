@@ -509,175 +509,309 @@ class MakeCSVNode(BaseNode):
 class ColumnSelectorNode(BaseNode):
     LABEL       = "Column Selector"
     TITLE_COLOR = (20, 100, 110, 255)
-
-    WIDTH = 260
+    WIDTH       = 320
 
     def __init__(self):
         super().__init__()
-        self._graph         = None
-        self._all_columns:  list[str] = []
-        self._x_columns:    list[str] = []
-        self._all_list_id:  int | None = None
-        self._x_list_id:    int | None = None
-        self._y_combo_id:   int | None = None
-        self._status_id:    int | None = None
+        self._columns      = None
+        self._x_features   = []
+        self._graph        = None
+
+        # Widget IDs
+        self._avail_list_id = None
+        self._x_list_id     = None
+        self._y_combo_id    = None
+        self._status_id     = None
 
     def set_graph(self, graph):
         self._graph = graph
 
+    # ══════════════════════════════════════════════════════════════════════
+    #  BUILD
+    # ══════════════════════════════════════════════════════════════════════
     def build(self, parent, pos=(10, 10)):
         with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
 
             # ── Input pin ─────────────────────────────────────────────────
-            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as attr_id:
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
                 dpg.add_text("data")
-            self.input_attrs["data"] = attr_id
+            self.input_attrs["data"] = a
 
-            # ── Static body ───────────────────────────────────────────────
+            # ── Body ──────────────────────────────────────────────────────
             with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                dpg.add_spacer(height=4)
+
                 self._status_id = dpg.add_text(
-                    "Connect a CSV node then hit Refresh",
-                    color=(160, 160, 160, 255),
+                    "No data connected",
+                    color=hex_to_rgb("#888888"),
                 )
-                dpg.add_button(
-                    label="↺ Refresh Columns",
+                dpg.add_spacer(height=6)
+
+                # Refresh button
+                refresh_btn = dpg.add_button(
+                    label="⟳ Refresh Columns",
                     width=self.WIDTH,
                     callback=self._refresh_from_upstream,
                 )
-                dpg.add_spacer(height=4)
+                self._apply_btn_theme(refresh_btn, hex_to_rgb("#555555"))
+                dpg.add_spacer(height=8)
 
-                # Available columns
-                dpg.add_text("Available columns:", color=(180, 180, 180, 255))
-                self._all_list_id = dpg.add_listbox(
+                # ── Available columns ─────────────────────────────────────
+                dpg.add_text("Available columns:",
+                             color=hex_to_rgb("#333333"))
+                self._avail_list_id = dpg.add_listbox(
                     items=[],
                     width=self.WIDTH,
-                    num_items=5,
+                    num_items=6,
                 )
-                with dpg.group(horizontal=True):
-                    dpg.add_button(
-                        label="→ Add to X",
-                        width=self.WIDTH // 2 - 2,
-                        callback=self._add_to_x,
-                    )
-                    dpg.add_button(
-                        label="✕ Remove X",
-                        width=self.WIDTH // 2 - 2,
-                        callback=self._remove_from_x,
-                    )
+                dpg.add_spacer(height=6)
 
-                # Selected X features
-                dpg.add_text("X features:", color=(100, 200, 255, 255))
+                # ── Add / Remove / Select All / Clear ─────────────────────
+                with dpg.group(horizontal=True):
+                    add_btn = dpg.add_button(
+                        label="+ Add X",
+                        width=self.WIDTH // 4 - 2,
+                        callback=self._add_feature,
+                    )
+                    rem_btn = dpg.add_button(
+                        label="- Remove",
+                        width=self.WIDTH // 4 - 2,
+                        callback=self._remove_feature,
+                    )
+                    all_btn = dpg.add_button(
+                        label="All",
+                        width=self.WIDTH // 4 - 2,
+                        callback=self._select_all,
+                    )
+                    clr_btn = dpg.add_button(
+                        label="Clear",
+                        width=self.WIDTH // 4 - 2,
+                        callback=self._clear_all,
+                    )
+                    self._apply_btn_theme(add_btn, hex_to_rgb("#4A7C59"))
+                    self._apply_btn_theme(rem_btn, hex_to_rgb("#8B4444"))
+                    self._apply_btn_theme(all_btn, hex_to_rgb("#2D6A9F"))
+                    self._apply_btn_theme(clr_btn, hex_to_rgb("#7A5A20"))
+
+                dpg.add_spacer(height=8)
+
+                # ── X features list ───────────────────────────────────────
+                dpg.add_text("X features:", color=hex_to_rgb("#333333"))
                 self._x_list_id = dpg.add_listbox(
                     items=[],
                     width=self.WIDTH,
-                    num_items=4,
+                    num_items=6,
                 )
+                dpg.add_spacer(height=8)
 
-                # y target
-                dpg.add_text("y target:", color=(255, 180, 80, 255))
+                # ── y target ──────────────────────────────────────────────
+                dpg.add_text("y target:", color=hex_to_rgb("#333333"))
                 self._y_combo_id = dpg.add_combo(
                     items=[],
                     width=self.WIDTH,
                 )
 
             # ── Output pins ───────────────────────────────────────────────
-            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as x_attr:
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
                 dpg.add_text("X")
-            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as y_attr:
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as b:
                 dpg.add_text("y")
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as c:
+                dpg.add_text("feature_names")
 
-            self.output_attrs = {"X": x_attr, "y": y_attr}
+            self.output_attrs = {"X": a, "y": b, "feature_names": c}
             self.output_attr  = None
 
         NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
         return self.node_id
 
-    # ── Refresh from upstream ─────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════════════════
+    #  COLUMN MANAGEMENT
+    # ══════════════════════════════════════════════════════════════════════
     def _refresh_from_upstream(self):
-        """Pull the DataFrame from the connected upstream node directly,
-        without needing to run the full graph."""
+        """Pull column names from the upstream CSV node."""
         if self._graph is None:
             dpg.set_value(self._status_id, "No graph reference.")
             return
 
-        # Find which output attr is linked to our data input pin
-        in_attr = self.input_attrs.get("data")
-        source_out = None
-        for _, (out_a, in_a) in self._graph._links.items():
+        in_attr  = self.input_attrs.get("data")
+        src_attr = None
+
+        for lid, (out_a, in_a) in self._graph._links.items():
             if in_a == in_attr:
-                source_out = out_a
+                src_attr = out_a
                 break
 
-        if source_out is None:
-            dpg.set_value(self._status_id, "No upstream node connected.")
+        if src_attr is None:
+            dpg.set_value(self._status_id, "Connect a CSV node first.")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
             return
 
-        # Find the upstream node and call execute() on it directly
-        source_nid = self._graph._attr_to_node.get(source_out)
-        source_node = self._graph._nodes.get(source_nid)
+        src_node_id = self._graph._attr_to_node.get(src_attr)
+        if src_node_id is None:
+            return
 
-        if source_node is None:
-            dpg.set_value(self._status_id, "Upstream node not found.")
+        src_node = self._graph._nodes.get(src_node_id)
+        if src_node is None:
             return
 
         try:
-            df = source_node.execute()
+            result = src_node.execute()
+            if result is None:
+                dpg.set_value(self._status_id, "Upstream returned no data.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return
+
+            import pandas as pd
+            df = result if isinstance(result, pd.DataFrame) else None
+            if df is None and isinstance(result, dict):
+                df = next((v for v in result.values()
+                           if isinstance(v, pd.DataFrame)), None)
+
+            if df is None:
+                dpg.set_value(self._status_id, "No DataFrame found upstream.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return
+
+            self._columns = list(df.columns)
+            self._populate_widgets()
+
         except Exception as e:
-            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.set_value(self._status_id, f"Refresh error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+
+    def _populate_widgets(self):
+        if not self._columns:
             return
+        dpg.configure_item(self._avail_list_id, items=self._columns)
+        dpg.configure_item(self._y_combo_id,    items=self._columns)
+        # Default y = last column
+        dpg.set_value(self._y_combo_id, self._columns[-1])
+        dpg.set_value(self._status_id,
+                      f"{len(self._columns)} columns loaded")
+        dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
 
-        if df is None:
-            dpg.set_value(self._status_id, "Upstream returned None — load a CSV first.")
-            return
+    # ── Feature buttons ───────────────────────────────────────────────────
+    def _add_feature(self):
+        selected = dpg.get_value(self._avail_list_id)
+        if selected and selected not in self._x_features:
+            self._x_features.append(selected)
+            dpg.configure_item(self._x_list_id, items=self._x_features)
 
-        self._load_columns(list(df.columns))
-
-    def _load_columns(self, columns: list[str]):
-        """Populate widgets with column names, preserving existing selections."""
-        prev_x = list(self._x_columns)
-        prev_y = dpg.get_value(self._y_combo_id)
-
-        self._all_columns = columns
-
-        # Restore valid previous selections, drop any that no longer exist
-        self._x_columns = [c for c in prev_x if c in columns]
-
-        dpg.configure_item(self._all_list_id, items=self._all_columns)
-        dpg.configure_item(self._x_list_id,   items=self._x_columns)
-        dpg.configure_item(self._y_combo_id,  items=self._all_columns)
-
-        if prev_y in columns:
-            dpg.set_value(self._y_combo_id, prev_y)
-
-        dpg.set_value(self._status_id, f"{len(columns)} columns loaded")
-
-    # ── Column management ─────────────────────────────────────────────────
-    def _add_to_x(self):
-        selected = dpg.get_value(self._all_list_id)
-        if selected and selected not in self._x_columns:
-            self._x_columns.append(selected)
-            dpg.configure_item(self._x_list_id, items=list(self._x_columns))
-
-    def _remove_from_x(self):
+    def _remove_feature(self):
         selected = dpg.get_value(self._x_list_id)
-        if selected in self._x_columns:
-            self._x_columns.remove(selected)
-            dpg.configure_item(self._x_list_id, items=list(self._x_columns))
+        if selected in self._x_features:
+            self._x_features.remove(selected)
+            dpg.configure_item(self._x_list_id, items=self._x_features)
 
-    # ── Execution ─────────────────────────────────────────────────────────
+    def _select_all(self):
+        if not self._columns:
+            dpg.set_value(self._status_id,
+                          "Refresh columns first.")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#CC4444"))
+            return
+        y_target         = dpg.get_value(self._y_combo_id)
+        self._x_features = [c for c in self._columns if c != y_target]
+        dpg.configure_item(self._x_list_id, items=self._x_features)
+        dpg.set_value(self._status_id,
+                      f"Selected {len(self._x_features)} features")
+        dpg.configure_item(self._status_id, color=hex_to_rgb("#2A7A2A"))
+
+    def _clear_all(self):
+        self._x_features = []
+        dpg.configure_item(self._x_list_id, items=[])
+        dpg.set_value(self._status_id, "Cleared all X features")
+        dpg.configure_item(self._status_id, color=hex_to_rgb("#888888"))
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  EXECUTE
+    # ══════════════════════════════════════════════════════════════════════
     def execute(self, data=None):
         if data is None:
-            return {"X": None, "y": None}
+            dpg.set_value(self._status_id, "No data received.")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#888888"))
+            return {"X": None, "y": None, "feature_names": None}
 
-        # Refresh columns if data changed
-        if list(data.columns) != self._all_columns:
-            self._load_columns(list(data.columns))
+        try:
+            import pandas as pd
 
-        y_col = dpg.get_value(self._y_combo_id)
-        X = data[self._x_columns] if self._x_columns else None
-        y = data[y_col]           if y_col in data.columns else None
+            if not isinstance(data, pd.DataFrame):
+                dpg.set_value(self._status_id,
+                              "Input must be a DataFrame.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return {"X": None, "y": None, "feature_names": None}
 
-        return {"X": X, "y": y}
+            # Auto-populate columns on first run if not refreshed yet
+            if self._columns is None:
+                self._columns = list(data.columns)
+                self._populate_widgets()
+
+            if not self._x_features:
+                dpg.set_value(self._status_id,
+                              "No X features selected.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return {"X": None, "y": None, "feature_names": None}
+
+            y_col = dpg.get_value(self._y_combo_id)
+            if not y_col:
+                dpg.set_value(self._status_id, "No y target selected.")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC4444"))
+                return {"X": None, "y": None, "feature_names": None}
+
+            # Filter only columns that exist in the DataFrame
+            valid_x = [c for c in self._x_features if c in data.columns]
+            if len(valid_x) != len(self._x_features):
+                missing = set(self._x_features) - set(valid_x)
+                dpg.set_value(self._status_id,
+                              f"Missing columns: {missing}")
+                dpg.configure_item(self._status_id,
+                                   color=hex_to_rgb("#CC8800"))
+
+            X = data[valid_x]
+            y = data[y_col]
+
+            dpg.set_value(self._status_id,
+                f"X: {X.shape}  y: {y.shape}")
+            dpg.configure_item(self._status_id,
+                               color=hex_to_rgb("#2A7A2A"))
+
+            return {
+                "X":             X,
+                "y":             y,
+                "feature_names": valid_x,
+            }
+
+        except Exception as e:
+            dpg.set_value(self._status_id, f"Error: {e}")
+            dpg.configure_item(self._status_id, color=hex_to_rgb("#CC4444"))
+            return {"X": None, "y": None, "feature_names": None}
+
+    # ══════════════════════════════════════════════════════════════════════
+    #  THEME HELPER
+    # ══════════════════════════════════════════════════════════════════════
+    def _apply_btn_theme(self, btn_id, color):
+        darker  = tuple(max(v - 25, 0) for v in color)
+        darkest = tuple(max(v - 50, 0) for v in color)
+        with dpg.theme() as t:
+            with dpg.theme_component(dpg.mvButton):
+                dpg.add_theme_color(dpg.mvThemeCol_Button,
+                                    color,   category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonHovered,
+                                    darker,  category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_ButtonActive,
+                                    darkest, category=dpg.mvThemeCat_Core)
+                dpg.add_theme_color(dpg.mvThemeCol_Text,
+                                    hex_to_rgb("#FFFFFF"),
+                                    category=dpg.mvThemeCat_Core)
+                dpg.add_theme_style(dpg.mvStyleVar_FrameRounding, 6,
+                                    category=dpg.mvThemeCat_Core)
+        dpg.bind_item_theme(btn_id, t)
 
 class TrainTestSplitNode(BaseNode):
     LABEL       = "Train Test Split"
