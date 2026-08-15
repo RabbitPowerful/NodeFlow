@@ -11,7 +11,6 @@ The platform allows users to preprocess datasets, perform feature engineering an
 - ANN model training
 - Feature selection using **RReliefF**
 - Model interpretability using **SHAP**
-- Correlation analysis and heatmaps
 - Visualization of training and prediction results
 - Modular node-based workflow
 
