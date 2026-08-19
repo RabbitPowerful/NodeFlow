@@ -29,7 +29,12 @@ ANN Training
    ↓
 Evaluation & Visualization
 
+```
 
-Status
+## Nodes:
+![Nodes1](images/Nodes1.png)
+![Nodes2](images/Nodes2.png)
 
+
+# Status:
 🚧 Under Development
