@@ -1,4 +1,4 @@
-# Node-Based ANN Machine Learning Platform
+# Nodeflow: Node-Based ANN Machine Learning Platform
 
 A Python-based visual machine learning platform for building and experimenting with **ANN workflows using a node-based interface**.
 
@@ -6,13 +6,15 @@ The platform allows users to preprocess datasets, perform feature engineering an
 
 ## Features
 
-- Data preprocessing and transformation
+- Data preprocessing
 - Feature engineering
 - ANN model training
 - Feature selection using **RReliefF**
 - Model interpretability using **SHAP**
 - Visualization of training and prediction results
 - Modular node-based workflow
+- Inference
+- Hyperparameter tuning
 
 ## Workflow
 
