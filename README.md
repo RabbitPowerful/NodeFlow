@@ -37,6 +37,8 @@ Evaluation & Visualization
 ![Nodes1](images/Nodes1.png)
 ![Nodes2](images/Nodes2.png)
 
+# Working ANN Node tree
+![Nodetree](images/ss1.png)
 
 # Status:
 🚧 Under Development
