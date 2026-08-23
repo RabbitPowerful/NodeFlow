@@ -47,36 +47,34 @@ class NodeEditorTheme:
     def apply_global(cls):
         with dpg.theme() as theme:
             with dpg.theme_component(dpg.mvNodeEditor):
-                cls._c("mvNodeCol_GridBackground",     (237, 237, 240, 255))  # warm light gray
-                cls._c("mvNodeCol_GridLine",           (237, 237, 240, 255))  # same as bg = invisible grid
-                cls._c("mvNodeCol_Link",               ( 40,  40,  45, 200))  # near-black thin wires
-                cls._c("mvNodeCol_LinkHovered",        ( 80, 180, 170, 255))  # teal on hover (matches ref)
-                cls._c("mvNodeCol_LinkSelected",       ( 80, 180, 170, 255))  # teal when selected
-                cls._c("mvNodeCol_BoxSelector",        ( 80, 180, 170,  30))
-                cls._c("mvNodeCol_BoxSelectorOutline", ( 80, 180, 170, 160))
-                cls._s("mvNodesStyleVar_GridSpacing",               28)
-                cls._s("mvNodesStyleVar_LinkThickness",              1)        # thin like reference
-                cls._s("mvNodesStyleVar_LinkLineSegmentsPerLength",  0.03)    # smooth bezier
-                cls._s("mvNodesStyleVar_LinkHoverDistance",         12)
-                cls._s("mvNodesStyleVar_PinCircleRadius",            4)
-                cls._s("mvNodesStyleVar_PinLineThickness",           1)
-                cls._s("mvNodesStyleVar_PinHoverRadius",            10)
-                cls._s("mvNodesStyleVar_PinOffset",                  0)
+                cls._c("mvNodeCol_Link",               ( 40,  40,  45, 200))  # color of wires connecting the nodes
+                cls._c("mvNodeCol_LinkHovered",        ( 80, 180, 170, 255))  # wire color when you hover over it
+                cls._c("mvNodeCol_LinkSelected",       ( 80, 180, 170, 255))  # wire color when you click on it
+                cls._c("mvNodeCol_BoxSelector",        ( 80, 180, 170,  30))  # fill color of the drag rectangle (keep alpha low)
+                cls._c("mvNodeCol_BoxSelectorOutline", ( 80, 180, 170, 160))  # border of the drag rectangle
+                cls._s("mvNodesStyleVar_GridSpacing",               28)       # distance between grid dots
+                cls._s("mvNodesStyleVar_LinkThickness",              1)       # how thick the wires are
+                cls._s("mvNodesStyleVar_LinkLineSegmentsPerLength",  0.03)    # smoothness of the bezier curve — lower = smoother
+                cls._s("mvNodesStyleVar_LinkHoverDistance",          12)      # how close your mouse needs to be to "hover" a wire
+                cls._s("mvNodesStyleVar_PinCircleRadius",  4)                 # size of the pin circle
+                cls._s("mvNodesStyleVar_PinLineThickness", 1)                 # thickness of pin circle outline
+                cls._s("mvNodesStyleVar_PinHoverRadius",  10)                 # clickable area around a pin
+                cls._s("mvNodesStyleVar_PinOffset",        0)                 # moves pins inward or outward from node edge
                 
             with dpg.theme_component(dpg.mvNode):
-                cls._c("mvNodeCol_TitleBar",                (40,  90, 140, 255))
-                cls._c("mvNodeCol_TitleBarHovered",         (55, 115, 175, 255))
-                cls._c("mvNodeCol_TitleBarSelected",        (70, 150, 220, 255))
-                cls._c("mvNodeCol_NodeBackground",          (30,  30,  45, 230))
-                cls._c("mvNodeCol_NodeBackgroundHovered",   (40,  40,  60, 240))
-                cls._c("mvNodeCol_NodeBackgroundSelected",  (50,  50,  75, 255))
-                cls._c("mvNodeCol_NodeOutline",             (80,  80, 110, 180))
-                cls._c("mvNodeCol_Pin",                     (100, 200, 255, 220))
-                cls._c("mvNodeCol_PinHovered",              (180, 240, 255, 255))
-                cls._s("mvNodesStyleVar_NodeCornerRounding",    6)
-                cls._s("mvNodesStyleVar_NodePaddingHorizontal", 12)
-                cls._s("mvNodesStyleVar_NodePaddingVertical",    8)
-                cls._s("mvNodesStyleVar_NodeBorderThickness",    1)
+                cls._c("mvNodeCol_TitleBar",               (40,  90, 140, 255))  # title bar color (overridden per node by TITLE_COLOR)
+                cls._c("mvNodeCol_TitleBarHovered",        (55, 115, 175, 255))  # title bar when mouse hovers over node
+                cls._c("mvNodeCol_TitleBarSelected",       (70, 150, 220, 255))  # title bar when node is selected/clicked
+                cls._c("mvNodeCol_NodeBackground",         (30,  30,  45, 230))  # main body fill — the dark area below the title
+                cls._c("mvNodeCol_NodeBackgroundHovered",  (40,  40,  60, 240))  # body color when mouse is over the node
+                cls._c("mvNodeCol_NodeBackgroundSelected", (50,  50,  75, 255))  # body color when node is selected
+                cls._c("mvNodeCol_NodeOutline",            (80,  80, 110, 180))  # border around the entire node
+                cls._c("mvNodeCol_Pin",                    (100, 200, 255, 220)) # pin dot color (input/output circles)
+                cls._c("mvNodeCol_PinHovered",             (180, 240, 255, 255)) # pin dot color when you hover over it
+                cls._s("mvNodesStyleVar_NodeCornerRounding",    6)               # how rounded the node corners are (0=sharp, higher=rounder)
+                cls._s("mvNodesStyleVar_NodePaddingHorizontal", 12)              # space between node edge and content, left and right
+                cls._s("mvNodesStyleVar_NodePaddingVertical",    8)              # space between node edge and content, top and bottom
+                cls._s("mvNodesStyleVar_NodeBorderThickness",    1)              # thickness of the outline border
 
         dpg.bind_theme(theme)
 
