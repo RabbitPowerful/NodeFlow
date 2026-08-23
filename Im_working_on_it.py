@@ -34,24 +34,22 @@ class NodeEditorTheme:
     @staticmethod
     def _c(name: str, value: tuple):
         if hasattr(dpg, name):
-            dpg.add_theme_color(getattr(dpg, name), value,
-                                category=dpg.mvThemeCat_Nodes)
+            dpg.add_theme_color(getattr(dpg, name), value, category=dpg.mvThemeCat_Nodes)
 
     @staticmethod
     def _s(name: str, value):
         if hasattr(dpg, name):
-            dpg.add_theme_style(getattr(dpg, name), value,
-                                category=dpg.mvThemeCat_Nodes)
+            dpg.add_theme_style(getattr(dpg, name), value,category=dpg.mvThemeCat_Nodes)
 
     @classmethod
     def apply_global(cls):
         with dpg.theme() as theme:
             with dpg.theme_component(dpg.mvNodeEditor):
-                cls._c("mvNodeCol_Link",               ( 40,  40,  45, 200))  # color of wires connecting the nodes
-                cls._c("mvNodeCol_LinkHovered",        ( 80, 180, 170, 255))  # wire color when you hover over it
-                cls._c("mvNodeCol_LinkSelected",       ( 80, 180, 170, 255))  # wire color when you click on it
-                cls._c("mvNodeCol_BoxSelector",        ( 80, 180, 170,  30))  # fill color of the drag rectangle (keep alpha low)
-                cls._c("mvNodeCol_BoxSelectorOutline", ( 80, 180, 170, 160))  # border of the drag rectangle
+                cls._c("mvNodeCol_Link",               hex_to_rgb("#28282D", alpha=200))  # color of wires connecting the nodes
+                cls._c("mvNodeCol_LinkHovered",        hex_to_rgb("#50B4AA"))  # wire color when you hover over it
+                cls._c("mvNodeCol_LinkSelected",       hex_to_rgb("#50B4AA"))  # wire color when you click on it
+                cls._c("mvNodeCol_BoxSelector",        hex_to_rgb("#50B4AA", alpha=30))  # fill color of the drag rectangle (keep alpha low)
+                cls._c("mvNodeCol_BoxSelectorOutline", hex_to_rgb("#50B4AA", alpha=160))  # border of the drag rectangle
                 cls._s("mvNodesStyleVar_GridSpacing",               28)       # distance between grid dots
                 cls._s("mvNodesStyleVar_LinkThickness",              1)       # how thick the wires are
                 cls._s("mvNodesStyleVar_LinkLineSegmentsPerLength",  0.03)    # smoothness of the bezier curve — lower = smoother
@@ -62,15 +60,15 @@ class NodeEditorTheme:
                 cls._s("mvNodesStyleVar_PinOffset",        0)                 # moves pins inward or outward from node edge
                 
             with dpg.theme_component(dpg.mvNode):
-                cls._c("mvNodeCol_TitleBar",               (40,  90, 140, 255))  # title bar color (overridden per node by TITLE_COLOR)
-                cls._c("mvNodeCol_TitleBarHovered",        (55, 115, 175, 255))  # title bar when mouse hovers over node
-                cls._c("mvNodeCol_TitleBarSelected",       (70, 150, 220, 255))  # title bar when node is selected/clicked
-                cls._c("mvNodeCol_NodeBackground",         (30,  30,  45, 230))  # main body fill — the dark area below the title
-                cls._c("mvNodeCol_NodeBackgroundHovered",  (40,  40,  60, 240))  # body color when mouse is over the node
-                cls._c("mvNodeCol_NodeBackgroundSelected", (50,  50,  75, 255))  # body color when node is selected
-                cls._c("mvNodeCol_NodeOutline",            (80,  80, 110, 180))  # border around the entire node
-                cls._c("mvNodeCol_Pin",                    (100, 200, 255, 220)) # pin dot color (input/output circles)
-                cls._c("mvNodeCol_PinHovered",             (180, 240, 255, 255)) # pin dot color when you hover over it
+                cls._c("mvNodeCol_TitleBar",               hex_to_rgb("#285A8C"))  # title bar color (overridden per node by TITLE_COLOR)
+                cls._c("mvNodeCol_TitleBarHovered",        hex_to_rgb("#3773AF"))  # title bar when mouse hovers over node
+                cls._c("mvNodeCol_TitleBarSelected",       hex_to_rgb("#4696DC"))  # title bar when node is selected/clicked
+                cls._c("mvNodeCol_NodeBackground",         hex_to_rgb("#1E1E2D", alpha=230))  # main body fill — the dark area below the title
+                cls._c("mvNodeCol_NodeBackgroundHovered",  hex_to_rgb("#28283C", alpha=240))  # body color when mouse is over the node
+                cls._c("mvNodeCol_NodeBackgroundSelected", hex_to_rgb("#32324B"))  # body color when node is selected
+                cls._c("mvNodeCol_NodeOutline",            hex_to_rgb("#50506E", alpha=180))  # border around the entire node
+                cls._c("mvNodeCol_Pin",                    hex_to_rgb("#64C8FF", alpha=220)) # pin dot color (input/output circles)
+                cls._c("mvNodeCol_PinHovered",             hex_to_rgb("#B4F0FF")) # pin dot color when you hover over it
                 cls._s("mvNodesStyleVar_NodeCornerRounding",    6)               # how rounded the node corners are (0=sharp, higher=rounder)
                 cls._s("mvNodesStyleVar_NodePaddingHorizontal", 12)              # space between node edge and content, left and right
                 cls._s("mvNodesStyleVar_NodePaddingVertical",    8)              # space between node edge and content, top and bottom
