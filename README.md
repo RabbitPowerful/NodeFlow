@@ -38,7 +38,11 @@ Evaluation & Visualization
 ![Nodes2](images/Nodes2.png)
 
 # Working ANN Node tree
+This is an example of a complete ANN training node tree along with results and validation curves
 ![Nodetree](images/ss1.png)
+![Nodetree](images/ss2.png)
+![Nodetree](images/ss3.png)
+![Nodetree](images/ss4.png)
 
 # Status:
 🚧 Under Development
