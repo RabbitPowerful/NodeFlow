@@ -1,0 +1,22 @@
+- Every node is a class 2 methods: build() and execute():
+    build — draws the node on screen. Runs once when you spawn the node.
+    execute — runs the node's logic. Runs every time you hit Run Graph.
+
+class MyValueNode(BaseNode):
+
+    LABEL       = "My Value"   # text on title bar
+    TITLE_COLOR = (60, 60, 65, 255)   # title bar color
+    WIDTH       = 160   # width of the node
+
+    def __init__(self):
+        super().__init__()
+        self._value_id = None   
+
+    def build(self, parent, pos=(10, 10)):
+        pass   # draw the node here
+
+    def execute(self):
+        pass   # logic here
+
+- Draw the node in build:
+Every node has three parts — input pins, body widgets, output pins. You wrap everything inside dpg.node(...).

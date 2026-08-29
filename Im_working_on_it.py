@@ -4363,6 +4363,103 @@ class SHAPNode(MatplotlibNodeBase):
                                     category=dpg.mvThemeCat_Core)
         dpg.bind_item_theme(btn_id, t)
 
+#Custom new test nodes
+class ValueNode(BaseNode):
+    LABEL = "Value" #shown in the nods title bar
+    TITLE_COLOR =  hex_to_rgb("#B4B407");    #color of the title bar
+    WIDTH = 160 #how wide the ndde is in pixels
+    
+    def __init__(self):
+        super().__init__()  #initializes BaseNode which sets up input_attrs, output_attrs++++
+        self._value_id = None  #will store the DPG ID of the input field so we can read it later in execute().
+        
+    def build(self,parent, pos= (10,10)):
+        # open the node
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # BODY — a widget with no pin
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                self._value_id = dpg.add_input_int(default_value=0, width=self.WIDTH)
+
+            # OUTPUT PIN
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as a:
+                dpg.add_text("value")
+
+            # register the output so the graph knows about it
+            self.output_attrs = {"value": a}
+            self.output_attr  = None
+
+        # apply title color
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id 
+
+    def execute(self):
+        return {"value": dpg.get_value(self._value_id)}
+
+
+class MathNode(BaseNode):
+    LABEL       = "Math"
+    TITLE_COLOR = (60, 60, 65, 255)
+    WIDTH       = 160
+
+    def __init__(self):
+        super().__init__()
+        self._operation_id = None
+
+    def build(self, parent, pos=(10, 10)):
+        with dpg.node(label=self.LABEL, parent=parent, pos=pos) as self.node_id:
+
+            # input pin A
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("A")
+            self.input_attrs["A"] = a
+
+            # input pin B
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Input) as b:
+                dpg.add_text("B")
+            self.input_attrs["B"] = b
+
+            # body — dropdown to pick operation
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static):
+                self._operation_id = dpg.add_combo(
+                    items=["Add", "Subtract", "Multiply", "Divide"],
+                    default_value="Add",
+                    width=self.WIDTH,
+                )
+
+            # output pin
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Output) as c:
+                dpg.add_text("result")
+            self.output_attrs = {"result": c}
+            self.output_attr  = None
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+
+    def execute(self, A=None, B=None):
+
+        # if nothing is connected return None
+        if A is None or B is None:
+            return {"result": None}
+
+        # read which operation the user picked
+        operation = dpg.get_value(self._operation_id)
+
+        # THIS IS THE LOGIC
+        if operation == "Add":
+            result = A + B
+        elif operation == "Subtract":
+            result = A - B
+        elif operation == "Multiply":
+            result = A * B
+        elif operation == "Divide":
+            if B == 0:
+                result = 0   # avoid divide by zero
+            else:
+                result = A / B
+
+        return {"result": result}
+
 #NodeEditor App 
 class NodeEditorApp:
     """Owns the DPG viewport and window. Delegates logic to NodeGraph."""
@@ -4386,6 +4483,8 @@ class NodeEditorApp:
         ("Loss Curve",   LossCurveNode),
         ("SHAP", SHAPNode),
         ("Feature Engineering", FeatureEngineeringNode),
+        ("Value", ValueNode),
+        ("Math", MathNode),
     ]
 
     EDITOR_TAG = "node_editor"
