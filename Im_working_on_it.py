@@ -4460,13 +4460,44 @@ class MathNode(BaseNode):
 
         return {"result": result}
 
-# class add(BaseNode):
-#     def __init__(self):
-#         super().__init__();
-#         self.operation_id = None
+class SumNode(BaseNode):
     
-#     # def build(self):~
+    LABEL       = "SumNode"
+    TITLE_COLOR = (60, 60, 65, 255)
+    WIDTH       = 300
+    
+    
+    def __init__(self):
+        super().__init__();
+    
+    def build(self, parent, pos=(10,10)):
         
+        with dpg.node(label = self.LABEL, parent = parent , pos = pos) as self.node_id:
+            
+            #input pins
+            with dpg.node_attribute(attribute_type= dpg.mvNode_Attr_Input) as a:
+                dpg.add_text("A")
+            self.input_attrs["A"] = a
+            
+            with dpg.node_attribute(attribute_type= dpg.mvNode_Attr_Input) as b:
+                dpg.add_text("B")
+            self.input_attrs["B"] = b
+            
+            # output pin
+            with dpg.node_attribute(attribute_type= dpg.mvNode_Attr_Output) as c:
+                dpg.add_text("Sum")
+            self.output_attrs = {"Sum": c}
+            self.output_attr = None
+            
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+            
+    def execute(self, A = None, B = None):
+        if A is None or B is None:
+            return {"Sum": None}
+        else:
+            result = A + B
+            return {"Sum": result}
 
 #NodeEditor App 
 class NodeEditorApp:
@@ -4493,6 +4524,7 @@ class NodeEditorApp:
         ("Feature Engineering", FeatureEngineeringNode),
         ("Value", ValueNode),
         ("Math", MathNode),
+        ("Sum", SumNode)
     ]
 
     EDITOR_TAG = "node_editor"
