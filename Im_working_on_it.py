@@ -4460,6 +4460,14 @@ class MathNode(BaseNode):
 
         return {"result": result}
 
+# class add(BaseNode):
+#     def __init__(self):
+#         super().__init__();
+#         self.operation_id = None
+    
+#     # def build(self):~
+        
+
 #NodeEditor App 
 class NodeEditorApp:
     """Owns the DPG viewport and window. Delegates logic to NodeGraph."""
@@ -4523,8 +4531,32 @@ class NodeEditorApp:
     # user_data is set. Using user_data to pass the class is reliable;
     # default-arg lambdas receive user_data as a 3rd positional arg which
     # overwrites the default, making c=cls resolve to None.
+    
+    def _get_canvas_mouse_pos(self):
+        # mouse position in screen space
+        mouse = dpg.get_mouse_pos(local=False)
+
+        # top left corner of the editor widget in screen space
+        canvas_min = dpg.get_item_rect_min(self.EDITOR_TAG)
+
+        # offset = how much the canvas has been panned
+        scroll_x = dpg.get_x_scroll(self.EDITOR_TAG)
+        scroll_y = dpg.get_y_scroll(self.EDITOR_TAG)
+
+        x = mouse[0] - canvas_min[0] + scroll_x
+        y = mouse[1] - canvas_min[1] + scroll_y
+
+        return (x, y)
+    
+    # def _on_menu_spawn(self, sender, app_data, user_data):
+    #     mouse = dpg.get_mouse_pos(local = False)
+    #     canvas = dpg.get_item_rect_min(self.EDITOR_TAG)
+    #     pos = (mouse[0]-canvas[0], mouse[1]-canvas[1])
+    #     self._spawn(user_data, pos=pos)
+
     def _on_menu_spawn(self, sender, app_data, user_data):
-        self._spawn(user_data)
+            pos = self._get_canvas_mouse_pos()
+            self._spawn(user_data, pos = pos)
 
     def _on_context_spawn(self, sender, app_data, user_data):
         self._spawn(user_data, pos=dpg.get_item_pos(self._menu_id))
