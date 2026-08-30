@@ -4366,7 +4366,7 @@ class SHAPNode(MatplotlibNodeBase):
 #Custom new test nodes
 class ValueNode(BaseNode):
     LABEL = "Value" #shown in the nods title bar
-    TITLE_COLOR =  hex_to_rgb("#B4B407");    #color of the title bar
+    TITLE_COLOR =  hex_to_rgb("#005A69");    #color of the title bar
     WIDTH = 160 #how wide the ndde is in pixels
     
     def __init__(self):
@@ -4466,7 +4466,6 @@ class SumNode(BaseNode):
     TITLE_COLOR = (60, 60, 65, 255)
     WIDTH       = 300
     
-    
     def __init__(self):
         super().__init__();
     
@@ -4499,6 +4498,37 @@ class SumNode(BaseNode):
             result = A + B
             return {"Sum": result}
 
+class PromptNode(BaseNode):
+    LABEL = "Prompt" #shown in the nods title bar
+    TITLE_COLOR =  hex_to_rgb("#005A69");    #color of the title bar
+    WIDTH = 360 #how wide the node is in pixels
+
+    def __init__(self):
+        super().__init__()
+
+    def build(self, parent, pos= (10,10)):
+
+        with dpg.node(label = self.LABEL, parent = parent, pos = pos) as self.node_id:
+
+            #input section
+            with dpg.node_attribute(attribute_type=dpg.mvNode_Attr_Static) as input_text:
+                self._input_id = dpg.add_input_text(width= self.WIDTH, multiline= True, height= 200, hint= "Type here")
+            
+            #Output pin
+            with dpg.node_attribute(attribute_type= dpg.mvNode_Attr_Output) as output:
+                dpg.add_text("Output") 
+            self.output_attrs = {"Output": output}
+            self.output_attr = None
+            
+
+        NodeEditorTheme.apply_to_node(self.node_id, self.TITLE_COLOR)
+        return self.node_id
+    
+    def execute (self):
+        text = dpg.get_value(self._input_id)
+        return {"Output": text}
+
+
 #NodeEditor App 
 class NodeEditorApp:
     """Owns the DPG viewport and window. Delegates logic to NodeGraph."""
@@ -4524,7 +4554,8 @@ class NodeEditorApp:
         ("Feature Engineering", FeatureEngineeringNode),
         ("Value", ValueNode),
         ("Math", MathNode),
-        ("Sum", SumNode)
+        ("Sum", SumNode),
+        ("Prompt", PromptNode)
     ]
 
     EDITOR_TAG = "node_editor"
